@@ -53,8 +53,12 @@ the joiner is told to probe the host (InitiateProbe) and does: 300 ms after it, 
 for 6 s and the service answers each (port 2) and probes back. The joiner never answers our probes and never sends its connection
 request; 106-0334 follows. Capture: scratch `minecraft-lce-captures/wiiu-quay-20261109-2025/join-box.pcap`.
 
-Decrypted probe payloads (RVCID u32, word2 u32, token u64) differ from a real host's in one field we do not understand: word2 is
-`0x00xxxxxx` in requests and `0x01xxxxxx` in replies on a console, constant per station and direction (Quay sent `00aaa640` on
-2026-11-07 and again today); ours is a millisecond timer (and type 0 in replies). Tokens are the sender's OSTime ticks, echoed back.
-Open: confirm our packets reach Quay (local capture during a join), then find from the game's PIA code what word2 is and how the
-joiner checks a probe.
+**Found (v0.2.7): byte 4 of the probe payload is the probe type.** The game's `nn::pia::nat::NatProbeData::Serialize`
+(Minecraft.Client.rpx 0x03608f1c) writes u32 sender RVCID, u8 type, three bytes it never sets (stack leftovers, so the "constant per
+station" `00aaa640` word is type 0 plus garbage), u64 token. `NatTraversalProtocol::ReceiveMessage` (0x03607004) runs `ProcessProbe`
+for type 0 (and answers with a type 1 reply that echoes the token, port 2) and `ProcessProbeReply` for type 1, and drops anything
+above 1. Only a type 1 reply whose RVCID matches the station the joiner was told to probe completes its NAT traversal; on 2026-11-07
+the joiner sent its connection request 6 ms after the host's type 1 reply. v0.2.6 put a millisecond timer in that word, so every
+reply had type 0 and read as one more probe; v0.2.7 sends type 0 / type 1 with zero padding. A joiner answers a type 0 probe only
+while its entry for that address is fresh (`NatProbe::UpdateTargetAddress` returns 0 once a probe from the same address was seen), so
+it not answering our repeated probes is expected. Retest: the joiner should connect right after our first reply.

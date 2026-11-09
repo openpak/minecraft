@@ -234,17 +234,31 @@ func (h *Host) peer(a netip.AddrPort) *Peer {
 }
 
 // probe sends the two NAT probe requests (type 0x34, port 1) a console host sends a joiner before anything else (capture, host
-// side, first two packets: its RVCID, its timer, an 8 byte token). A joiner answers them and waits for them before it sends its
+// side, first two packets: its RVCID, type 0, an 8 byte token; see probePayload). A joiner answers them and waits for them before it sends its
 // connection request, so a host that only answers the joiner's own probes leaves the joiner stuck.
 func (p *Peer) probe() {
 	h := p.h
 	for i := uint64(0); i < 2; i++ {
-		out := make([]byte, 16)
-		binary.BigEndian.PutUint32(out, h.RVCID)
-		binary.BigEndian.PutUint32(out[4:], uint32(h.ms()))
-		binary.BigEndian.PutUint64(out[8:], uint64(h.CID)<<8+i)
-		p.emit(Message{Flags: 9, Src: uint64(h.PID), Proto: ProtoProbe, Port: 1, Payload: out})
+		p.emit(Message{Flags: 9, Src: uint64(h.PID), Proto: ProtoProbe, Port: 1, Payload: probePayload(h.RVCID, probeRequest, uint64(h.CID)<<8+i)})
 	}
+}
+
+// NAT probe payload (the game's nn::pia::nat::NatProbeData::Serialize, Minecraft.Client.rpx 0x03608f1c): u32 the sender's
+// connection id (RVCID), u8 type, 3 bytes the game never sets (stack garbage, so constant per console: the "00aaa640" word),
+// u64 token (the sender's OS ticks, echoed in the reply). NatTraversalProtocol::ReceiveMessage (0x03607004) runs ProcessProbe for
+// type 0 and ProcessProbeReply for type 1 and drops anything else; only a type 1 reply whose RVCID names the station it was told
+// to probe completes the joiner's NAT traversal, and the joiner sends its connection request after that.
+const (
+	probeRequest = 0
+	probeReply   = 1
+)
+
+func probePayload(rvcid uint32, typ uint8, token uint64) []byte {
+	out := make([]byte, 16)
+	binary.BigEndian.PutUint32(out, rvcid)
+	out[4] = typ
+	binary.BigEndian.PutUint64(out[8:], token)
+	return out
 }
 
 // HostRVCID is the RendezVous connection id the service host announces in its station URL (nex) and its packets. A real host's is
@@ -327,11 +341,8 @@ func (p *Peer) message(m Message) {
 	switch m.Proto {
 	case ProtoProbe:
 		if m.Port == 1 && len(m.Payload) >= 16 {
-			out := make([]byte, 16)
-			binary.BigEndian.PutUint32(out, h.RVCID)
-			binary.BigEndian.PutUint32(out[4:], uint32(h.ms()))
-			copy(out[8:], m.Payload[8:16]) // the sender's token comes back
-			p.emit(Message{Flags: 9, Src: uint64(h.PID), Proto: ProtoProbe, Port: 2, Payload: out})
+			// the sender's token comes back
+			p.emit(Message{Flags: 9, Src: uint64(h.PID), Proto: ProtoProbe, Port: 2, Payload: probePayload(h.RVCID, probeReply, binary.BigEndian.Uint64(m.Payload[8:16]))})
 		}
 	case ProtoRTT:
 		if len(m.Payload) >= 16 && m.Payload[3] == 0 {
