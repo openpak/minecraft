@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.3
+
+- The PIA host sends the two NAT probe requests (0x34/1) a console host sends a joiner before anything else (read from the capture's
+  first two host packets); a real console joiner waits for them and never sent its connection request without them (first real
+  Quay join through the Join tab, card #162).
+
 ## 0.2.2
 
 - `joinprobe` sends a tick message every 5 s like a console, so it stays in the world for `-wait` (the service drops a silent joiner after 30 s).

@@ -224,11 +224,26 @@ func (h *Host) peer(a netip.AddrPort) *Peer {
 	if p == nil {
 		p = &Peer{h: h, Addr: a, streams: map[[2]uint8]*stream{}, ourConn: 0xbb}
 		h.peers[a] = p
+		p.probe()
 		if h.NewPeer != nil {
 			h.NewPeer(p)
 		}
 	}
 	return p
+}
+
+// probe sends the two NAT probe requests (type 0x34, port 1) a console host sends a joiner before anything else (capture, host
+// side, first two packets: its RVCID, its timer, an 8 byte token). A joiner answers them and waits for them before it sends its
+// connection request, so a host that only answers the joiner's own probes leaves the joiner stuck.
+func (p *Peer) probe() {
+	h := p.h
+	for i := uint64(0); i < 2; i++ {
+		out := make([]byte, 16)
+		binary.BigEndian.PutUint32(out, h.RVCID)
+		binary.BigEndian.PutUint32(out[4:], uint32(h.ms()))
+		binary.BigEndian.PutUint64(out[8:], uint64(h.CID)<<8+i)
+		p.emit(Message{Flags: 9, Src: uint64(h.PID), Proto: ProtoProbe, Port: 1, Payload: out})
+	}
 }
 
 // Handle processes one datagram from a joiner.
