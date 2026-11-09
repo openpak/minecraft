@@ -13,6 +13,8 @@ import (
 	"github.com/openpak/minecraft/internal/pia5"
 )
 
+const chTick = 3 // the capture's tick channel
+
 // ProbeResult is what a probe joiner saw.
 type ProbeResult struct {
 	Messages, Chunks int
@@ -66,6 +68,12 @@ func Probe(ctx context.Context, host netip.AddrPort, gathering uint32, hostPID u
 	}
 	j.SendGame(pre)
 	j.SendGame([]byte{0, 1, 0x01, 0, 0, 1, 0x3c})
+	go func() { // a console sends tick messages all the time; the service drops a joiner that is silent for 30 s
+		for ctx.Err() == nil {
+			time.Sleep(5 * time.Second)
+			j.SendGame([]byte{0, chTick})
+		}
+	}()
 	deadline := time.Now().Add(wait)
 	for time.Now().Before(deadline) {
 		time.Sleep(200 * time.Millisecond)

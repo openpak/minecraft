@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2
+
+- `joinprobe` sends a tick message every 5 s like a console, so it stays in the world for `-wait` (the service drops a silent joiner after 30 s).
+
 ## 0.2.1
 
 - The default nn-account resolve URL is the real port (20050); `joinprobe -wait` sets how long the probe stays in the world.
