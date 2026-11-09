@@ -150,16 +150,14 @@ type Peer struct {
 	ourAck             uint32
 	timer              uint16 // last timer seen from the peer
 	pktID              uint16
-	connected          bool // join response sent: packets carry our connection id and rising ids
-	joined             bool
+	connected          bool     // join response sent: packets carry our connection id and rising ids
+	pending            [][]byte // complete game messages waiting for their callback
 	streams            map[[2]uint8]*stream
 	respSent, invSent  bool
 	lastRTT, lastClock time.Time
 	rtts               int
 	// OnGame receives each complete game message (one reliable message, the `00 channel` framing still on it).
 	OnGame func(msg []byte)
-	// OnJoined runs once the mesh is up and the joiner's reliable game stream is open.
-	OnJoined func()
 }
 
 // PID is the joiner's PID from its connection request.
@@ -245,11 +243,19 @@ func (h *Host) Handle(from netip.AddrPort, b []byte) {
 // HandleMessages processes the messages of an opened packet.
 func (h *Host) HandleMessages(from netip.AddrPort, hd Header, msgs []Message) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	p := h.peer(from)
 	p.timer = hd.Timer
 	for _, m := range msgs {
 		p.message(m)
+	}
+	deliver := p.pending
+	p.pending = nil
+	h.mu.Unlock()
+	// the game callbacks run without the lock: they send (Peer.Send locks)
+	for _, msg := range deliver {
+		if p.OnGame != nil {
+			p.OnGame(msg)
+		}
 	}
 }
 
@@ -499,14 +505,8 @@ func (p *Peer) reliable(m Message) {
 		if r.Flags&2 != 0 {
 			msg := s.asm
 			s.asm = nil
-			if m.Proto == ProtoReliable && p.OnGame != nil {
-				if !p.joined {
-					p.joined = true
-					if p.OnJoined != nil {
-						p.OnJoined()
-					}
-				}
-				p.OnGame(msg)
+			if m.Proto == ProtoReliable {
+				p.pending = append(p.pending, msg)
 			}
 		}
 	}

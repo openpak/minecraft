@@ -17,6 +17,8 @@ func main() {
 	switch cmd {
 	case "serve":
 		err = serve()
+	case "joinprobe":
+		err = joinprobe()
 	case "healthcheck":
 		err = healthcheck()
 	case "version":
