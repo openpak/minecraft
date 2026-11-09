@@ -14,6 +14,8 @@ console captures (`docs/provenance.md`). Card openpak/prds#162; PS3/360 adapters
 - Wii U only; PS3 and 360 plug in beside `internal/lce` once their captures exist.
 - Not yet: other players and mobs, chat, console block-change packets (columns are re-sent), the stock friend-list listing.
 
+- `docs/wiiu-join.md`: how a Wii U player finds and joins the world (presence values, what the game does after the join) and what still blocks it.
+
 ## Run
 
 `minecraft serve` (default). Ports: block 20270 (HTTP, internal), Wii U transport UDP 22960 (public). Environment:
