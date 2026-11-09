@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.5
+
+- A datagram that no leg's key opens is logged (once a minute per address) instead of dropped silently.
+
 ## 0.2.4
 
 - `POST /internal/probe` (gathering, address, port): the host probes a joiner's public address, which is what a console host does when

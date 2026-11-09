@@ -49,10 +49,11 @@ type Relay struct {
 	LegTTL       time.Duration
 	Presence     *presence.Reporter // nil: players are not published to the account core
 
-	mu    sync.Mutex
-	legs  map[int64]*leg
-	peers map[netip.AddrPort]*leg
-	next  int64
+	mu        sync.Mutex
+	unmatched map[netip.AddrPort]time.Time
+	legs      map[int64]*leg
+	peers     map[netip.AddrPort]*leg
+	next      int64
 }
 
 // Register adds a leg and returns its id.
@@ -178,6 +179,9 @@ func (r *Relay) legFor(b []byte, from netip.AddrPort) *leg {
 	if l := r.peers[from]; l != nil {
 		return l
 	}
+	if r.unmatched == nil {
+		r.unmatched = map[netip.AddrPort]time.Time{}
+	}
 	for _, l := range r.legs {
 		if _, _, _, err := l.cipher.Open(b); err == nil {
 			r.peers[from] = l
@@ -187,6 +191,14 @@ func (r *Relay) legFor(b []byte, from netip.AddrPort) *leg {
 			}
 			return l
 		}
+	}
+	// a packet no leg's key opens: logged once a minute per address (a joiner with another session key, or a stray datagram)
+	if len(r.unmatched) > 1000 { // ponytail: strays are rare; start over rather than keep a clock
+		r.unmatched = map[netip.AddrPort]time.Time{}
+	}
+	if t, ok := r.unmatched[from]; !ok || time.Since(t) > time.Minute {
+		r.unmatched[from] = time.Now()
+		slog.Info("packet no leg opens", "peer", from.String(), "len", len(b), "legs", len(r.legs))
 	}
 	return nil
 }
