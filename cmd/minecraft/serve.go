@@ -62,7 +62,7 @@ func serve() error {
 	}
 	var pres *presence.Reporter
 	if addr := os.Getenv("MINECRAFT_CORE_ADDRESS"); addr != "" {
-		if pres, err = presence.Dial(addr, os.Getenv("MINECRAFT_CORE_INTERNAL_KEY"), env("MINECRAFT_RESOLVE_URL", "http://openpak-nn-account:8001"), os.Getenv("MINECRAFT_RESOLVE_KEY")); err != nil {
+		if pres, err = presence.Dial(addr, os.Getenv("MINECRAFT_CORE_INTERNAL_KEY"), env("MINECRAFT_RESOLVE_URL", "http://openpak-nn-account:20050"), os.Getenv("MINECRAFT_RESOLVE_KEY")); err != nil {
 			return fmt.Errorf("account core: %w", err)
 		}
 	} else {
