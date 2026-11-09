@@ -1,0 +1,27 @@
+# Sample quadlet: copy to ~/.config/containers/systemd/openpak-minecraft-core.container, then run pin-ips.sh --apply.
+# The name is -core because openpak-minecraft-wiiu (the NEX title) and openpak-minecraft-dungeons are taken.
+[Unit]
+Description=OpenPak Minecraft service (Java Edition world + Wii U adapter; common/minecraft)
+Requires=openpak-postgres.service
+After=openpak-postgres.service
+
+[Container]
+ContainerName=openpak-minecraft-core
+Image=ghcr.io/openpak/minecraft:latest
+AutoUpdate=registry
+Network=openpak.network
+# internal HTTP (the nex title registers the world's leg), loopback on the host
+PublishPort=127.0.0.1:20270:20270
+# Wii U game transport, public (consoles dial it)
+PublishPort=22960:22960/udp
+Volume=openpak-minecraft-world:/data
+EnvironmentFile=%h/openpak/deploy/.env
+Environment=MINECRAFT_HTTP_ADDR=:20270 MINECRAFT_RELAY_ADDR=:22960 MINECRAFT_RELAY_PUBLIC=145.241.199.19:22960 MINECRAFT_JAVA_XMX=1g
+HealthCmd=["/minecraft","healthcheck"]
+
+[Service]
+Restart=always
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target
