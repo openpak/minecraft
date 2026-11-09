@@ -183,7 +183,7 @@ type Host struct {
 }
 
 func NewHost(c *Cipher, self netip.AddrPort, pid uint32, out Out) *Host {
-	h := &Host{cipher: c, Self: self, PID: pid, RVCID: 1, start: time.Now(), out: out, peers: map[netip.AddrPort]*Peer{}, Log: slog.Default()}
+	h := &Host{cipher: c, Self: self, PID: pid, RVCID: HostRVCID, start: time.Now(), out: out, peers: map[netip.AddrPort]*Peer{}, Log: slog.Default()}
 	var r [8]byte
 	rand.Read(r[:])
 	h.CID = binary.BigEndian.Uint32(r[:4])
@@ -244,6 +244,22 @@ func (p *Peer) probe() {
 		binary.BigEndian.PutUint64(out[8:], uint64(h.CID)<<8+i)
 		p.emit(Message{Flags: 9, Src: uint64(h.PID), Proto: ProtoProbe, Port: 1, Payload: out})
 	}
+}
+
+// HostRVCID is the RendezVous connection id the service host announces in its station URL (nex) and its packets. A real host's is
+// its NEX connection id; the service is no NEX client, so it takes one that no live connection has (NEX hands out small ids from 1).
+const HostRVCID = 0xFFF0
+
+// ProbeTo makes the host probe a joiner's public address: what a console host does when the NEX server relays the joiner's
+// RequestProbeInitiationExt (the joiner waits for it).
+func (h *Host) ProbeTo(a netip.AddrPort) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if p := h.peers[a]; p != nil {
+		p.probe()
+		return
+	}
+	h.peer(a) // a new peer is probed on creation
 }
 
 // Handle processes one datagram from a joiner.

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.4
+
+- `POST /internal/probe` (gathering, address, port): the host probes a joiner's public address, which is what a console host does when
+  the NEX server relays the joiner's `RequestProbeInitiationExt` (the Wii U game sends it after the join and gives up after 15 s
+  without the host's probes). nex forwards it for the world.
+- The host announces RVCID 0xFFF0 (was 1): nex relays that request to the connection with the URL's RVCID, so it must not be a live one.
+
 ## 0.2.3
 
 - The PIA host sends the two NAT probe requests (0x34/1) a console host sends a joiner before anything else (read from the capture's

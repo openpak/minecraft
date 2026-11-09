@@ -24,3 +24,22 @@ func TestHostProbesNewJoiner(t *testing.T) {
 		t.Fatalf("probes sent: %d, want 2", probes)
 	}
 }
+
+// ProbeTo (the joiner asked the NEX server to make the host probe it) probes a known address again and a new one on first sight.
+func TestHostProbeTo(t *testing.T) {
+	c, _ := NewCipher(make([]byte, 16), 3)
+	var probes int
+	h := NewHost(c, netip.MustParseAddrPort("127.0.0.1:22960"), 2000000001, func(_ netip.AddrPort, _ Header, _ [8]byte, msgs []Message) {
+		for _, m := range msgs {
+			if m.Proto == ProtoProbe && m.Port == 1 {
+				probes++
+			}
+		}
+	})
+	a := netip.MustParseAddrPort("10.0.0.3:6000")
+	h.ProbeTo(a)
+	h.ProbeTo(a)
+	if probes != 4 {
+		t.Fatalf("probes sent: %d, want 4", probes)
+	}
+}

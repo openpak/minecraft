@@ -126,6 +126,24 @@ func (r *Relay) newPeer(l *leg, p *pia5.Peer) {
 	l.peers[p.Addr] = lce.NewSession(cfg, p, l.spec.HostPID)
 }
 
+// ProbeJoiner has the leg of a gathering probe a joiner's public address (the joiner asked the NEX server to make the host do so).
+func (r *Relay) ProbeJoiner(gathering int64, a netip.AddrPort) error {
+	r.mu.Lock()
+	var host *pia5.Host
+	for _, l := range r.legs {
+		if l.spec.Gathering == gathering {
+			host = l.host
+		}
+	}
+	r.mu.Unlock()
+	if host == nil {
+		return fmt.Errorf("no leg for gathering %d", gathering)
+	}
+	slog.Info("probing joiner", "gathering", gathering, "to", a.String())
+	host.ProbeTo(a)
+	return nil
+}
+
 // Legs lists the registered legs (no keys).
 func (r *Relay) Legs() []map[string]any {
 	r.mu.Lock()

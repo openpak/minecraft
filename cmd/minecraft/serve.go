@@ -104,6 +104,27 @@ func serve() error {
 		}
 		json.NewEncoder(w).Encode(map[string]any{"id": id, "station": public.String()})
 	}))
+	mux.HandleFunc("POST /internal/probe", authed(func(w http.ResponseWriter, r *http.Request) {
+		var q struct {
+			Gathering int64  `json:"gathering"`
+			Address   string `json:"address"`
+			Port      uint16 `json:"port"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&q); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		ip, err := netip.ParseAddr(q.Address)
+		if err != nil || q.Port == 0 {
+			http.Error(w, "bad address", http.StatusBadRequest)
+			return
+		}
+		if err := rl.ProbeJoiner(q.Gathering, netip.AddrPortFrom(ip, q.Port)); err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		w.Write([]byte("ok\n"))
+	}))
 	mux.HandleFunc("GET /internal/legs", authed(func(w http.ResponseWriter, _ *http.Request) { json.NewEncoder(w).Encode(rl.Legs()) }))
 	srv := &http.Server{Addr: env("MINECRAFT_HTTP_ADDR", ":20270"), Handler: httplog.Middleware(mux), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
