@@ -46,9 +46,15 @@ the viewer starts or leaves Minecraft.
    the host itself. The station URL carries no private address: the box's private address is no use to any joiner.
 5. Only then the joiner's PIA station handshake (connection request, session join) starts, as in the capture.
 
-## 4. What still stops a Quay join (2026-11-09)
+## 4. What still stops a Quay join (2026-11-09, evening)
 
-The joiner's public URL in step 4 carries the address the NEX server saw: `10.89.2.24`, the Traefik UDP proxy's container address
-(the service sees `10.89.2.171` the same way), with `natf=2;natm=1;probeinit=1`. A host cannot probe that. Until the NEX servers (and
-this service) see real client addresses, or a relay path replaces host-first probing, the join times out after about 15 s
-(error 118-0502 / 118-0521) with `EndParticipation` and `SendReport`. A real Wii U check by the owner is still open.
+Since #166 every NEX title and this service run on the host network, so the addresses are real; since nex v1.19.7 / minecraft v0.2.6
+the joiner is told to probe the host (InitiateProbe) and does: 300 ms after it, Quay sends 0x34 port-1 probes to 22960 every ~310 ms
+for 6 s and the service answers each (port 2) and probes back. The joiner never answers our probes and never sends its connection
+request; 106-0334 follows. Capture: scratch `minecraft-lce-captures/wiiu-quay-20261109-2025/join-box.pcap`.
+
+Decrypted probe payloads (RVCID u32, word2 u32, token u64) differ from a real host's in one field we do not understand: word2 is
+`0x00xxxxxx` in requests and `0x01xxxxxx` in replies on a console, constant per station and direction (Quay sent `00aaa640` on
+2026-11-07 and again today); ours is a millisecond timer (and type 0 in replies). Tokens are the sender's OSTime ticks, echoed back.
+Open: confirm our packets reach Quay (local capture during a join), then find from the game's PIA code what word2 is and how the
+joiner checks a probe.
