@@ -27,6 +27,9 @@ The nex title `minecraft-wiiu` creates the world's gathering and registers its l
 
     GOWORK=off go vet ./... && GOWORK=off go test ./...
 
+`minecraft joinprobe -host ip:port -gathering N -keyfile F` joins a service like a console and prints the join order, chunk count
+and whether the first chunk decodes (the verification of the deployed stack without a console).
+
 Live checks: `MC_JAVA_ADDR=127.0.0.1:25565` (a running 1.8.9 server) and `MC_CAPTURE_DIR` (the Wii U capture) enable more tests.
 
 License: AGPL-3.0-only.

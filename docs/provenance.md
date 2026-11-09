@@ -44,6 +44,12 @@ secret); tests that need them read `MC_CAPTURE_DIR` and skip without it.
 | N1 | The world's matchmake row: game mode 15, 8 participants, participation policy 95, flags 2560, application buffer (212 B, net version 0x0881 first) and matchmake param (33 B), with the console names removed | nex `titles/minecraft-wiiu/nex/world*.go` |
 | N2 | A Wii U joins with `JoinMatchmakeSessionWithParam` (protocol 109 method 39) then `GetSessionURLs` (protocol 21 method 41) | nex hooks |
 
+## Tests built from the capture
+
+`pia5.Joiner` (the joiner side of P3-P6, G1-G3) drives the host in `internal/relay/e2e_test.go` and `minecraft joinprobe`. It
+shows the host and the capture's joiner agree with each other; it does not show that a console accepts the host. That needs a
+real Wii U join (Quay or hardware) and is the open item of card #162.
+
 ## Unconfirmed (listed, not built)
 
 - U1 Block ids above 174 and what the console draws for them; they are sent as air.
