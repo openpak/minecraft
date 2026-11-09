@@ -3,6 +3,8 @@ package pia5
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"net/netip"
 	"sync"
@@ -140,18 +142,20 @@ type stream struct {
 
 // Peer is one joiner.
 type Peer struct {
-	h                 *Host
-	Addr              netip.AddrPort
-	req               connRequest // the joiner's connection request
-	haveReq           bool
-	ourConn           uint8
-	ourAck            uint32
-	timer             uint16 // last timer seen from the peer
-	pktID             uint16
-	connected         bool // join response sent: packets carry our connection id and rising ids
-	joined            bool
-	streams           map[[2]uint8]*stream
-	respSent, invSent bool
+	h                  *Host
+	Addr               netip.AddrPort
+	req                connRequest // the joiner's connection request
+	haveReq            bool
+	ourConn            uint8
+	ourAck             uint32
+	timer              uint16 // last timer seen from the peer
+	pktID              uint16
+	connected          bool // join response sent: packets carry our connection id and rising ids
+	joined             bool
+	streams            map[[2]uint8]*stream
+	respSent, invSent  bool
+	lastRTT, lastClock time.Time
+	rtts               int
 	// OnGame receives each complete game message (one reliable message, the `00 channel` framing still on it).
 	OnGame func(msg []byte)
 	// OnJoined runs once the mesh is up and the joiner's reliable game stream is open.
@@ -282,6 +286,8 @@ func (p *Peer) message(m Message) {
 		}
 	case ProtoReliable:
 		p.reliable(m)
+	default:
+		h.Log.Info("pia: message not handled", "peer", p.Addr.String(), "type", fmt.Sprintf("%#x", m.Proto), "port", m.Port, "len", len(m.Payload), "head", hex.EncodeToString(m.Payload[:min(len(m.Payload), 24)]))
 	}
 }
 
@@ -297,6 +303,7 @@ func (p *Peer) stationMsg(pl []byte) {
 			return
 		}
 		p.req, p.haveReq = r, true
+		h.Log.Info("pia: connection request", "peer", p.Addr.String(), "conn", r.ConnID, "version", r.Version, "pid", r.Public.PID, "dest_pid", r.DestPID, "public", r.Public.Addr.String(), "private", r.Private.Addr.String())
 		p.emit(p.station(stationAck(r.AckID)))
 		if p.invSent {
 			return
@@ -312,6 +319,7 @@ func (p *Peer) stationMsg(pl []byte) {
 		}
 		p.emit(p.station(stationAck(binary.BigEndian.Uint32(pl[251:]))))
 		if !p.respSent {
+			h.Log.Info("pia: connection response", "peer", p.Addr.String())
 			p.respSent = true
 			p.emit(p.station(connResponse(p.req.Version, p.req.Public.PID, p.req.Public.CID, p.ourAck+1)))
 		}
@@ -347,6 +355,7 @@ func (p *Peer) sessionMsg(pl []byte) {
 		return
 	}
 	p.connected = true
+	h.Log.Info("pia: mesh join", "peer", p.Addr.String())
 	resp := append([]byte{2, 2, 0, 1, 1, 0, 2, 0}, meshHeader...)
 	resp = append(resp, p.stations()...)
 	resp = binary.BigEndian.AppendUint32(resp, p.ourAck+2)
@@ -427,6 +436,9 @@ func (h *Host) Tick() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, p := range h.peers {
+		if p.connected {
+			p.keepalives()
+		}
 		for _, s := range p.streams {
 			for i := range s.flight {
 				if time.Since(s.flight[i].sent) > resendAge {
@@ -435,6 +447,28 @@ func (h *Host) Tick() {
 				}
 			}
 		}
+	}
+}
+
+// keepalives sends the periodic station traffic the console host sent in the capture: an RTT request every 0.2 s for the first
+// eight, then every 2 s, and a clock request every second (P3). Without them the joiner's PIA has nothing to measure.
+func (p *Peer) keepalives() {
+	h := p.h
+	gap := 2 * time.Second
+	if p.rtts < 8 {
+		gap = 200 * time.Millisecond
+	}
+	if time.Since(p.lastRTT) >= gap {
+		p.lastRTT = time.Now()
+		p.rtts++
+		ping := make([]byte, 16)
+		binary.BigEndian.PutUint64(ping[8:], h.ms())
+		p.emit(p.conn(ProtoRTT, 0, ping))
+	}
+	if time.Since(p.lastClock) >= time.Second {
+		p.lastClock = time.Now()
+		req := binary.BigEndian.AppendUint64(nil, h.ms())
+		p.emit(p.conn(ProtoClock, 0, binary.BigEndian.AppendUint64(req, 0)))
 	}
 }
 
@@ -457,6 +491,9 @@ func (p *Peer) reliable(m Message) {
 		return
 	}
 	if r.Seq == s.recvNext {
+		if m.Proto == ProtoReliable && r.Seq == FirstSeq {
+			p.h.Log.Info("pia: first game segment", "peer", p.Addr.String(), "len", len(r.Payload))
+		}
 		s.recvNext++
 		s.asm = append(s.asm, r.Payload...)
 		if r.Flags&2 != 0 {
