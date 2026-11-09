@@ -22,7 +22,7 @@ type ProbeResult struct {
 
 // Probe joins as a console would (the capture's joiner messages) and counts what the host sends: the join order of
 // docs/provenance.md G3 and chunks that decode. It is the test of the whole stack without a console.
-func Probe(ctx context.Context, host netip.AddrPort, gathering uint32, hostPID uint32, key []byte, name string, wantChunks int, wait time.Duration) (ProbeResult, error) {
+func Probe(ctx context.Context, host netip.AddrPort, gathering uint32, hostPID uint32, key []byte, pid uint32, name string, wantChunks int, wait time.Duration) (ProbeResult, error) {
 	var res ProbeResult
 	cipher, err := pia5.NewCipher(key, gathering)
 	if err != nil {
@@ -38,7 +38,7 @@ func Probe(ctx context.Context, host netip.AddrPort, gathering uint32, hostPID u
 	}
 	var mu sync.Mutex
 	var got [][]byte
-	j := &pia5.Joiner{Conn: jc, Host: host, Cipher: cipher, PID: 1570020199, HostPID: hostPID, Self: self, Joined: make(chan struct{})}
+	j := &pia5.Joiner{Conn: jc, Host: host, Cipher: cipher, PID: pid, HostPID: hostPID, Self: self, Joined: make(chan struct{})}
 	j.OnGame = func(b []byte) {
 		mu.Lock()
 		got = append(got, b)

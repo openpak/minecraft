@@ -15,6 +15,7 @@ import (
 
 	"github.com/openpak/minecraft/internal/lce"
 	"github.com/openpak/minecraft/internal/pia5"
+	"github.com/openpak/minecraft/internal/presence"
 	"github.com/openpak/minecraft/internal/store"
 )
 
@@ -46,6 +47,7 @@ type Relay struct {
 	HostName     string
 	ViewDistance int
 	LegTTL       time.Duration
+	Presence     *presence.Reporter // nil: players are not published to the account core
 
 	mu    sync.Mutex
 	legs  map[int64]*leg
@@ -101,12 +103,17 @@ func (r *Relay) Register(ctx context.Context, s LegSpec) (int64, error) {
 func (r *Relay) newPeer(l *leg, p *pia5.Peer) {
 	var sid int64
 	cfg := lce.Config{JavaAddr: r.JavaAddr, HostName: r.HostName, HostID: l.hostID, ViewDistance: r.ViewDistance, Log: slog.Default().With("leg", l.id)}
+	var leave func()
 	cfg.Joined = func(string) {
+		leave = r.Presence.Join(p.PID())
 		if r.Store != nil {
 			sid, _ = r.Store.StartSession(context.Background(), l.id, int64(p.PID()))
 		}
 	}
 	cfg.Left = func(reason string, chunks int64) {
+		if leave != nil {
+			go leave()
+		}
 		if r.Store != nil && sid != 0 {
 			r.Store.EndSession(context.Background(), sid, reason, chunks)
 		}

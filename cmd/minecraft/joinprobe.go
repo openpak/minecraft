@@ -21,6 +21,7 @@ func joinprobe() error {
 	gid := fs.Uint("gathering", 0, "the world's gathering id")
 	pid := fs.Uint("hostpid", 2000000001, "the world's owner PID")
 	keyfile := fs.String("keyfile", "", "file holding the session key as hex")
+	player := fs.Uint("pid", 1570020199, "the joining player's Wii U PID (a test account's, to appear as that friend)")
 	name := fs.String("name", "ProbeBot", "console player name")
 	want := fs.Int("chunks", 20, "chunk messages to wait for")
 	fs.Parse(os.Args[2:])
@@ -36,7 +37,7 @@ func joinprobe() error {
 	if err != nil {
 		return err
 	}
-	res, err := relay.Probe(context.Background(), ap, uint32(*gid), uint32(*pid), key, *name, *want, 60*time.Second)
+	res, err := relay.Probe(context.Background(), ap, uint32(*gid), uint32(*pid), key, uint32(*player), *name, *want, 60*time.Second)
 	fmt.Printf("%+v\n", res)
 	return err
 }

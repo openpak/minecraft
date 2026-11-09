@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0
+
+- Players in the world are published to the account core's live-session registry (namespace `minecraft`, title `world`, client
+  `wiiu`), renewed every 15 s and ended when they leave, so adapters can show a friend as being in the shared world (card #162).
+  The Wii U PID is resolved to the account through nn-account's `/internal/resolve/pid`. Enabled by `MINECRAFT_CORE_ADDRESS`
+  (`MINECRAFT_CORE_INTERNAL_KEY`, `MINECRAFT_RESOLVE_URL` default `http://openpak-nn-account:8001`, `MINECRAFT_RESOLVE_KEY`).
+- `minecraft joinprobe -pid N`: join as a given Wii U PID (a test account), so that account shows as in the world.
+
 ## 0.1.2
 
 - Fix: a deadlock on the first game message (the game callbacks ran under the host's lock while they send); found by the new

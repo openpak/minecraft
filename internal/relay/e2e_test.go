@@ -33,7 +33,7 @@ func TestJoinerEndToEnd(t *testing.T) {
 	if _, err := r.Register(ctx, LegSpec{Gathering: 77, HostPID: 2000000001, SessionKey: hex.EncodeToString(key)}); err != nil {
 		t.Fatal(err)
 	}
-	res, err := Probe(ctx, srv, 77, 2000000001, key, "ProbeBot", 10, 40*time.Second)
+	res, err := Probe(ctx, srv, 77, 2000000001, key, 1570020199, "ProbeBot", 10, 40*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

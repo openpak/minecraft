@@ -20,7 +20,7 @@ console captures (`docs/provenance.md`). Card openpak/prds#162; PS3/360 adapters
 `MINECRAFT_HTTP_ADDR` (:20270), `MINECRAFT_RELAY_ADDR` (:22960), `MINECRAFT_RELAY_PUBLIC` (the ip:port consoles are given),
 `MINECRAFT_DATABASE_URL` (Postgres: `legs`, `sessions`), `MINECRAFT_INTERNAL_KEY` (bearer for `/internal/*`),
 `MINECRAFT_JAVA_DIR` (/data, the world volume), `MINECRAFT_JAVA_XMX` (768m), `MINECRAFT_VIEW_DISTANCE` (6),
-`MINECRAFT_JAVA_EXTERNAL=1` (use `MINECRAFT_JAVA_ADDR` instead of starting a server). Quadlet sample: `deploy/openpak-minecraft-core.container`.
+`MINECRAFT_CORE_ADDRESS` (account core gRPC; with `MINECRAFT_CORE_INTERNAL_KEY`, `MINECRAFT_RESOLVE_URL`, `MINECRAFT_RESOLVE_KEY` it publishes each player in the world to the core's session registry as `minecraft/world`), `MINECRAFT_JAVA_EXTERNAL=1` (use `MINECRAFT_JAVA_ADDR` instead of starting a server). Quadlet sample: `deploy/openpak-minecraft-core.container`.
 The nex title `minecraft-wiiu` creates the world's gathering and registers its leg here every minute (`MINECRAFT_SERVICE_URL`).
 
 ## Build and test

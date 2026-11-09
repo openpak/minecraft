@@ -18,6 +18,7 @@ import (
 
 	"github.com/openpak/minecraft/internal/httplog"
 	"github.com/openpak/minecraft/internal/javaserver"
+	"github.com/openpak/minecraft/internal/presence"
 	"github.com/openpak/minecraft/internal/relay"
 	"github.com/openpak/minecraft/internal/store"
 )
@@ -59,7 +60,15 @@ func serve() error {
 	if err != nil {
 		return err
 	}
-	rl := &relay.Relay{Conn: conn, Public: public, Store: st, JavaAddr: env("MINECRAFT_JAVA_ADDR", fmt.Sprintf("127.0.0.1:%d", javaPort)),
+	var pres *presence.Reporter
+	if addr := os.Getenv("MINECRAFT_CORE_ADDRESS"); addr != "" {
+		if pres, err = presence.Dial(addr, os.Getenv("MINECRAFT_CORE_INTERNAL_KEY"), env("MINECRAFT_RESOLVE_URL", "http://openpak-nn-account:8001"), os.Getenv("MINECRAFT_RESOLVE_KEY")); err != nil {
+			return fmt.Errorf("account core: %w", err)
+		}
+	} else {
+		slog.Warn("MINECRAFT_CORE_ADDRESS unset: players are not published to the account core")
+	}
+	rl := &relay.Relay{Presence: pres, Conn: conn, Public: public, Store: st, JavaAddr: env("MINECRAFT_JAVA_ADDR", fmt.Sprintf("127.0.0.1:%d", javaPort)),
 		HostName: env("MINECRAFT_HOST_NAME", "OpenPak"), ViewDistance: view}
 	go func() {
 		if err := rl.Serve(ctx); err != nil && ctx.Err() == nil {
