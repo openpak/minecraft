@@ -156,6 +156,7 @@ type Peer struct {
 	respSent, invSent  bool
 	lastRTT, lastClock time.Time
 	rtts               int
+	heard, probing     bool // a packet came from the peer; ProbeTo's repeat loop runs
 	// OnGame receives each complete game message (one reliable message, the `00 channel` framing still on it).
 	OnGame func(msg []byte)
 }
@@ -251,16 +252,41 @@ func (p *Peer) probe() {
 const HostRVCID = 0xFFF0
 
 // ProbeTo makes the host probe a joiner's public address: what a console host does when the NEX server relays the joiner's
-// RequestProbeInitiationExt (the joiner waits for it).
+// RequestProbeInitiationExt (the joiner waits for it). It repeats the probes every probeEvery for probeFor until the joiner is heard
+// from: a joiner behind a port-restricted NAT drops them until its own probe to the host (told by InitiateProbe) has opened the
+// mapping, which can come seconds later.
 func (h *Host) ProbeTo(a netip.AddrPort) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if p := h.peers[a]; p != nil {
+	p := h.peers[a]
+	if p == nil {
+		p = h.peer(a) // a new peer is probed on creation
+	} else {
 		p.probe()
+	}
+	if p.probing || p.heard {
 		return
 	}
-	h.peer(a) // a new peer is probed on creation
+	p.probing = true
+	every, end := probeEvery, time.Now().Add(probeFor)
+	go func() {
+		for time.Now().Before(end) {
+			time.Sleep(every)
+			h.mu.Lock()
+			if p.heard {
+				h.mu.Unlock()
+				break
+			}
+			p.probe()
+			h.mu.Unlock()
+		}
+		h.mu.Lock()
+		p.probing = false
+		h.mu.Unlock()
+	}()
 }
+
+var probeEvery, probeFor = 250 * time.Millisecond, 20 * time.Second
 
 // Handle processes one datagram from a joiner.
 func (h *Host) Handle(from netip.AddrPort, b []byte) {
@@ -276,6 +302,12 @@ func (h *Host) HandleMessages(from netip.AddrPort, hd Header, msgs []Message) {
 	h.mu.Lock()
 	p := h.peer(from)
 	p.timer = hd.Timer
+	if !p.heard {
+		p.heard = true
+		if p.probing { // its mapping is open now: probe once more so a host probe reaches it
+			p.probe()
+		}
+	}
 	for _, m := range msgs {
 		p.message(m)
 	}

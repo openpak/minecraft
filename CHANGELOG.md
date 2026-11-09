@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.6
+
+- `POST /internal/probe` keeps probing the joiner every 250 ms for up to 20 s until the joiner is heard from, then probes once more. A
+  joiner behind a port-restricted NAT drops the host's probes until its own probe (nex sends it `InitiateProbe`) has opened its mapping.
+
 ## 0.2.5
 
 - A datagram that no leg's key opens is logged (once a minute per address) instead of dropped silently.
