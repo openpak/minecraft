@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `internal/lce/walk` (prds#177): splits a length-less console game stream into packets for all 130 Wii U v688 ids (the 129 shared
+  with PS3 01.84 plus A2) and translates packets between the Wii U and PS3 dialects (net version 0x0881 <-> 0x0884, PlayerUID
+  20 <-> 28 bytes in 02, 01, 14, D1, E7, CE). Library only; nothing calls it yet. docs/provenance.md W1-W12.
+
 ## 0.2.10
 
 - The PIA mesh join response goes to destination 0, as a console host sends it. Sent to the joiner's station bit (2), a real Wii U

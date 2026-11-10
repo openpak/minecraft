@@ -8,7 +8,9 @@ document was used or consulted while writing this repo. The only inputs were:
   recorded 2026-11-07; analysis in the private research repo `minecraft-lce/wiiu-capture-2026-11-07.md`),
 - `common/terraria/internal/pia` (our PIA 3.x code) and the OpenPak NEX title `minecraft-wiiu` (Pretendo's AGPL server, merged),
 - the public Java Edition protocol documentation (minecraft.wiki) for the Java side,
-- the public kinnay NintendoClients wiki (PIA) as a hint for the packet header, confirmed by the capture's GCM tags.
+- the public kinnay NintendoClients wiki (PIA) as a hint for the packet header, confirmed by the capture's GCM tags,
+- for the game-stream walker (card #177): the retail game binaries of the owner's own consoles, Wii U v688
+  `Minecraft.Client.rpx` and PS3 NPEB01899 01.84 `EBOOT.BIN`, disassembled and decompiled locally.
 
 A fact is implemented only if a capture row below confirms it. Capture files are not in this repo (the session key is a live
 secret); tests that need them read `MC_CAPTURE_DIR` and skip without it.
@@ -45,6 +47,38 @@ secret); tests that need them read `MC_CAPTURE_DIR` and skip without it.
 | N2 | A Wii U joins with `JoinMatchmakeSessionWithParam` (protocol 109 method 39) then `GetSessionURLs` (protocol 21 method 41) | nex hooks |
 | N3 | The joiner's PIA connect job (`InetConnectStationJob::CheckErrorOccurredImpl`, rpx 0x03587310) asks `NexMatchMeshLayerController::IsParticipated` (0x035d5d40) whether the host's station id (its PID) is in the gathering's participant list and fails the join (118-0502, monitoring result 0x6439) when it is not; that list is filled only by NEX 3001 participation events (`ProcessNotificationEvent` 0x035d661c, key = Param2). So the world gathering keeps the host PID among its participants and NEX's flag-0x800 recap names it to every joiner. Real Wii U 2026-11-10 20:46: probes complete in 60 ms, no connection request, `EndParticipation` 60 ms later | nex `titles/minecraft-wiiu/nex/world.go` (v1.19.8) |
 | P10 | The host's mesh join response (18/0, 164 B) has destination 0 (11-07 capture: the console host's `bb` packet 1 carries the 0x58 ping to destination 2 and the join response to 0). Real Wii U 2026-11-10 21:10: with the response sent to 2 the console acked every handshake message but never this one (no `05 ... ffeccc7a`) and sent nothing after its join request | `Peer.sessionMsg`; `TestReplayHandshake` (needs `MC_CAPTURE_DIR`) |
+
+## Game-stream walker (`internal/lce/walk`, card prds#177)
+
+Layouts come from the retail binaries the owner's consoles run (Wii U v688 `Minecraft.Client.rpx` with its own symbol table;
+PS3 NPEB01899 01.84 EBOOT, free-licence NPDRM) and are checked against the captures. Work files: `scratch/minecraft/lce-walk/`
+(`out/read688.c` is a headless Ghidra decompile of every Wii U packet `read()`; `rseq.py`/`rseq_ps3.py` list the stream calls
+of each `read()` on both builds; `ps3dis.py` disassembles a PS3 vtable slot). Every packet's read address is the comment on
+its `layouts` entry.
+
+| Id | Fact (evidence) | Implemented in |
+| --- | --- | --- |
+| W1 | A packet is one id byte and the packet's `read()`; no length (`Packet::readPacket` 0x02703cc8) | `Next`, `Walk` |
+| W2 | Stream primitives: `readByte` is unsigned (0x0220b8c0 `clrlwi 0x18`); VarInt 7-bit low-first, gives up after 6 bytes (0x02210d5c); `Packet::readUtf` short count + UTF-16BE units (0x02705834); `readUTF` u16 byte length + modified UTF-8 (0x0220c1fc); block pos = long; `readPlayerUID` 20 raw bytes (0x0220c518) | `rd` |
+| W3 | Item: short id (negative = empty), byte count, short aux, NBT (`readItem` 0x0221126c); NBT: short length, none when negative (`readNbt` 0x02210ec4, the `bge` the decompiler dropped); compressed NBT: two shorts (raw, compressed length) then the compressed bytes (0x0221102c) | `item`, `nbt`, `cnbt` |
+| W4 | Entity data: byte id (0xFF ends), byte type, value; types 0 byte, 1 VarInt, 2 float, 3 readUTF, 4 item, 5 VarInt, 6 bool, 7 three floats, 8 long, 9 bool + long, 10 one byte, 11 NBT (`SynchedEntityData::unpack` 0x0299be04 jump table 0x0299beb8, serializer reads 0x0239c9c4-0x023a7450) | `meta` |
+| W5 | FlexiblePacket (03 Chat, D2 GameMode): header int, strings in bits 0-7, VarInts 8-19, booleans 20-27 packed in one byte, floats 28-31 (0x02401100) | `flexible` |
+| W6 | Conditional layouts read from the decompile and, where it failed (UpdateAttributes 0x0222c1d0), the disassembly: 17, 18, 1C, 1D, 2C, 33, 34, 3C, 3F, 64, 66, 68, 86, 8B, 96, 9A, 9E, A0, A7, A8, C8, CE, D1, D3, D5, D6, D9, DB, DD, E1, EB, EF, FA | `layouts.go` |
+| W7 | LevelParticles parameter counts: `ParticleType` constructor argument 4 in the static initialisers 0x027acb80-0x027ae560: type 39 has 2, 0x200000, 40 and 48 have 1, all others 0 | `particleParams` |
+| W8 | Scoreboard CE: type 0 Add (two bytes, 46 records), 1 Update (two bytes, long mask, the set records), 2 Remove (PlayerUID); record 0 PlayerUID, 1-2 readUTF, 3-5 bool, 6-9 float, 10-45 VarInt (`readRecord` 0x028a104c). So Add and Update carry a PlayerUID too, not only Remove | `scoreboard` |
+| W9 | SetPlayerTeam D1 carries a list: modes 0, 3, 4 read byte n then n PlayerUIDs (0x02223c10) | `playerTeam` |
+| W10 | PS3 01.84 `read()` (vtable slot 3, stream vtable slot k at 4(k+1)) has the Wii U call sequence for 104 classes outright; the rest differ only by inlining (VarInt, block pos), loop unrolling or tool artefacts, checked by hand: PreLogin (14-byte block 0x15c970, PlayerUIDs 0x1c apart), MGPlayerSettings (0x167a78-0x167b54), PlayerCombat, BossEvent, SetBorder, Scoreboard Remove (PlayerUID via stream slot 0x58, 28 bytes, 0x5828b8) | `PS3` dialect |
+| W11 | PlayerCombat D5 event 2 is VarInt + int + utf on **both** builds: Wii U read 0x021e82a8 branches at 0x021e832c and write 0x021e83d8 at 0x021e8460, and the 11-07 capture's real Wii U host sent two event-2 packets (13 and 12 bytes). The 2026-11-10 research note's "no payload on Wii U" missed the second branch; no D5 rewrite exists | `combat`, `Translate` |
+| W12 | 11-07 capture: host->joiner packets 137,767 bytes / 15,009 packets, chunks 1,460,606 / 408, joiner->host 5,344 / 224, all walk to the last byte with no unknown id, and every packet survives WiiU->PS3->WiiU byte for byte | `TestCaptureStreams` (needs `MC_CAPTURE_DIR`) |
+
+PlayerUID mapping (`UIDMap`): Wii U ids are opaque 20-byte values; PS3 ids are 28 bytes (layout [I]: SceNpOnlineId plus 8
+bytes). A Wii U id becomes itself plus 8 zero bytes on PS3; a PS3 id becomes its SHA-1 (20 bytes) on Wii U unless it ends in 8
+zero bytes; all-zero and all-0xFF ids keep their fill. Pairs are remembered for the session, so ids come back unchanged.
+Unconfirmed until a PS3 capture: what real PS3 ids look like, whether a PS3 accepts synthesised ids, its empty-slot fill.
+
+PS3 layouts not confirmed by any PS3 capture (all of them; these were not even read on the PS3 binary, only assumed equal to
+Wii U): the Scoreboard Add/Update record reads (data class slot 2), the ParticleType parameter table, the entity data type
+numbering, and the A2 base packet (PS3 has no constant getter for it).
 
 ## Tests built from the capture
 
