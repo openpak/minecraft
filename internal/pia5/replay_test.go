@@ -56,6 +56,9 @@ func TestReplayHandshake(t *testing.T) {
 	out := func(to netip.AddrPort, hd Header, nonce [8]byte, msgs []Message) {
 		for _, m := range msgs {
 			got = append(got, fmt.Sprintf("conn=%02x id=%d %02x/%d len=%d %x", hd.Conn, hd.ID, m.Proto, m.Port, len(m.Payload), head(m.Payload, 20)))
+			if m.Proto == ProtoSession && m.Port == 0 && m.Dest != 0 {
+				t.Errorf("join response sent to destination %d; the captured host sent it to 0", m.Dest)
+			}
 		}
 	}
 	h := NewHost(cipher, netip.MustParseAddrPort("10.87.0.2:22960"), 0x5d949b50, out)

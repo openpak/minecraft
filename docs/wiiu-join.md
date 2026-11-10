@@ -157,3 +157,25 @@ Our world gathering (flags 2560, including 0x800 "participation events reproduci
 every current participant. But nex's minute reset set `participants = '{}'`, so the recap was empty and the world host 2000000001
 was never named. nex v1.19.8 keeps the host PID in the list (creation and the minute reset). A real console host is always in its
 own gathering's participant list, which is why the 2026-11-07 console-to-Quay join worked.
+
+## 8. The join response must go to destination 0 (2026-11-10 21:10, 118-0502)
+
+With the host in the participant list (section 7) the real console got through the whole station handshake: probes, connection
+request (`conn=60`, its connection id 0x3c), our ack and inverse request, its connection response, and its mesh join request (18/0,
+14 bytes) at 21:10:58.350. The service acked it and sent the join response (18/0, 164 bytes, our handshake sequence `ffeccc7a`) in
+connection-id `bb` packet 1 at .351, then the 588-byte mesh update and the game hello. The console acked every earlier handshake
+message (`ffeccc78`, `ffeccc79`), but never this one, and sent nothing at all after .350; minecraft-core timed the session out at
+21:11:27 (`chunks=0`). On 2026-11-07 the console host's packet 1 was the same pair of messages, and the joiner answered 12 ms later
+with its first `c4` packet (RTT, the ack of the host's sequence, clock).
+
+The one field that differs is the message destination. Message destinations are station bit masks (host index 0 = 1, joiner index
+1 = 2). The console host sent the 0x58 ping in that packet to 2 but the join response to **0**: the joiner learns its station index
+from the join response, so it cannot yet be addressed by its bit. We sent both to 2, and the console dropped the response. joinprobe
+does not check destinations, so it always passed. minecraft v0.2.10 sends the join response to 0; the capture replay test
+(`TestReplayHandshake` with `MC_CAPTURE_DIR`) now checks it and fails on v0.2.9.
+
+Not the cause: the public port (the console reports 37.228.205.125:5242 from its NAT check while its PIA socket maps to 5272; the
+console host on 11-07 also echoed the joiner's own reported address), and the second player WiiTest (each joiner gets its own
+two-station mesh from the service, so the console never sees WiiTest's station). Capture:
+scratch `minecraft-lce-captures/wiiu-real-20261110-2110/`.
+

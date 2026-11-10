@@ -441,7 +441,11 @@ func (p *Peer) sessionMsg(pl []byte) {
 	resp = binary.BigEndian.AppendUint32(resp, p.ourAck+2)
 	ping := make([]byte, 16)
 	binary.BigEndian.PutUint64(ping[8:], h.ms())
-	p.emit(p.conn(ProtoRTT, 0, ping), p.conn(ProtoSession, 0, resp))
+	// The join response goes to destination 0, not the joiner's station bit: the joiner has no station index until it reads this
+	// message, and a real console joiner never acks a response sent to 2 (2026-11-10 21:10 capture; docs/wiiu-join.md section 8).
+	join := p.conn(ProtoSession, 0, resp)
+	join.Dest = 0
+	p.emit(p.conn(ProtoRTT, 0, ping), join)
 	time.AfterFunc(50*time.Millisecond, func() {
 		h.mu.Lock()
 		defer h.mu.Unlock()

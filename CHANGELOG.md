@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.10
+
+- The PIA mesh join response goes to destination 0, as a console host sends it. Sent to the joiner's station bit (2), a real Wii U
+  dropped it and the join ended 118-0502 after the mesh join (2026-11-10 21:10). docs/wiiu-join.md section 8.
+
 ## 0.2.9
 
 - Presence is shared per Wii U PID: two world sessions of one PID (a joinprobe restart, or a console that rejoins before its old
