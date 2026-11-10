@@ -43,6 +43,7 @@ secret); tests that need them read `MC_CAPTURE_DIR` and skip without it.
 | C9 | The console's own encodings are not canonical (palettes with duplicates, wider modes than needed); this encoder writes the smallest mode, which decodes to the same column | `lcechunk_test.go` |
 | N1 | The world's matchmake row: game mode 15, 8 participants, participation policy 95, flags 2560, application buffer (212 B, net version 0x0881 first) and matchmake param (33 B), with the console names removed | nex `titles/minecraft-wiiu/nex/world*.go` |
 | N2 | A Wii U joins with `JoinMatchmakeSessionWithParam` (protocol 109 method 39) then `GetSessionURLs` (protocol 21 method 41) | nex hooks |
+| N3 | The joiner's PIA connect job (`InetConnectStationJob::CheckErrorOccurredImpl`, rpx 0x03587310) asks `NexMatchMeshLayerController::IsParticipated` (0x035d5d40) whether the host's station id (its PID) is in the gathering's participant list and fails the join (118-0502, monitoring result 0x6439) when it is not; that list is filled only by NEX 3001 participation events (`ProcessNotificationEvent` 0x035d661c, key = Param2). So the world gathering keeps the host PID among its participants and NEX's flag-0x800 recap names it to every joiner. Real Wii U 2026-11-10 20:46: probes complete in 60 ms, no connection request, `EndParticipation` 60 ms later | nex `titles/minecraft-wiiu/nex/world.go` (v1.19.8) |
 
 ## Tests built from the capture
 

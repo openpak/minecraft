@@ -134,3 +134,26 @@ proven: a test with the stream stopped is still needed.
 No server change can help: the console spends its 15 s budget waiting on a house link that holds packets for seconds, and our
 replies are already sent. Before the next retry, stop the Moonlight session and run the desktop-to-1.1.1.1 test again. If it is
 clean (max well under 1 s), retry the join. With normal latency, the whole sequence fits in the budget with about 10 s to spare.
+
+## 7. The joiner refuses a host that is not a gathering participant (2026-11-10 20:46, 118-0502)
+
+With a clean house link the probe exchange finished in under 100 ms (console probes 15.843 to 15.889, our type 1 replies at 15.844,
+the console's replies to our probes up to 15.889), and the console still sent no connection request: `EndParticipation` (50/1) at
+15.950 and `SendReport` at 16.019. So 118-0502 is not the 15 s NAT budget; the 14:49 run (section 6) ended the same way, one probe
+pair then `EndParticipation` about 100 ms later, and its 15 s match was a coincidence of the slow link.
+
+The `SendReport` blob is the game's PIA session-end monitoring report: AES-GCM with a key table in the rpx (key 13, IV = header
+bytes 6-13 plus 4 table bytes), then zlib (`MonitoringDataSender::MakeReportData`, 0x0358f23c). Decoded, it records join result
+0x6439 after 2802 ms. 0x6439 is the generic code JoinMeshJob stores when its connect job fails (`StartConnectingToHost` /
+`CheckTransportConnectionStatus`).
+
+Why the connect job fails: after the NAT traversal it goes `ResolveCurrentAddress` -> `TryCurrentAddress` ->
+`SendConnectionRequest` (0x035496f8), which first runs `CheckErrorOccurred`. For the inet job (0x03587310) that takes the host's
+station id (its PID) and calls `NexMatchMeshLayerController::IsParticipated(gathering, id)` (0x035d5d40). That looks the PID up in
+a list filled only by NEX notification 3001 (participation, subtype 1; `ProcessNotificationEvent` 0x035d661c keys the entry on
+Param2). If the host is not listed, the job errors out before the connection request is sent.
+
+Our world gathering (flags 2560, including 0x800 "participation events reproducible") makes nex send each joiner a 3001 recap for
+every current participant. But nex's minute reset set `participants = '{}'`, so the recap was empty and the world host 2000000001
+was never named. nex v1.19.8 keeps the host PID in the list (creation and the minute reset). A real console host is always in its
+own gathering's participant list, which is why the 2026-11-07 console-to-Quay join worked.
