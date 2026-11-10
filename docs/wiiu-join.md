@@ -104,11 +104,20 @@ Where the 15 s went (box capture, `minecraft-lce-captures/wiiu-real-20261110-144
 | 32.607 / 32.631 | ReplaceURL and RequestProbeInitiationExt were answered at once, and InitiateProbe was sent at 32.633. The console retransmitted both at 34.6 and 36.6 and acknowledged at 36.712. |
 | 36.832 | The console's first probe, 4.2 s after InitiateProbe. The exchange then took 57 ms. |
 
-The service and nex answer each request in under 1 ms, and the console's upstream packets arrived on time. Packets from the box to
-the house took 4 to 8 s, and only in these windows. The owner's PS3 on the same public address (np-community TCP 5223) shows the same
-gaps in its kernel TCP acks: data sent at 09.903 was acked at 17.400, and data sent at 31.307 was acked at 36.718. Kernel acks do not
-depend on any game, so both consoles waited on the same delayed downstream path: the home link, or something between the box and it.
-The earlier attempt at 14:23 had no such delay: requests were answered and acknowledged within 30 to 70 ms, and the console probed at
-once (its packets were still ignored because of section 5).
+The service and nex answer each request in under 1 ms (every reply is on `enp0s6` within 0.2 ms of the request), and the console's
+upstream packets arrived on time. Our packets to the consoles took 4 to 10 s to arrive, and only during these windows. The owner's
+PS3 (np-community TCP 5223) on the same public address stalled in the same way. Our segment sent at 09.903 was acked at 13.778, with
+the ack echoing the original's timestamp. Its retransmits from 10.3 to 13.1 s arrived as duplicate SACKs from 20.58 to 21.67 s, so
+they arrived in order 8 to 10 s late. Nothing was lost; the packets sat in a queue. We sent the house under 7 KB/s at the time.
 
-Retry when nothing else at home is downloading. With normal latency, the whole sequence fits in the budget with about 10 s to spare.
+The delay is not on the internet path or at OCI. The desktop in the same house (same public IP, same box address 10.0.0.249)
+had two SSH sessions to the box at 14:49:25 and 14:49:31, in the middle of both stalls, with normal 30 to 70 ms round trips. Only
+the consoles were starved, so the queue is on their side of the router: the 2.4 GHz Wi-Fi link that the Wii U (2.4 GHz only) and the
+PS3 share, or an extender or powerline hop in front of them. The console's NAT check probes also reached the box in bursts with
+identical timestamps (seven at 23.5356, twelve at 28.5715), which fits a local radio link that holds frames and releases them together.
+PS3 ack timing over the whole afternoon (14:17 to 16:00) shows 78 of 369 segments acked after more than 1 s (median 0.27 s), so these
+stalls are frequent, not a one-off. The earlier attempt at 14:23 fell in a clean window: requests were acknowledged within 30 to 70 ms.
+
+No server change can help: the console spends its 15 s budget waiting for our replies, and they are already sent. Retry with the Wii
+U on a wired USB LAN adapter, or close to the router with nothing else on the 2.4 GHz network busy. With normal latency, the whole
+sequence fits in the budget with about 10 s to spare.
