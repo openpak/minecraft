@@ -80,6 +80,25 @@ PS3 layouts not confirmed by any PS3 capture (all of them; these were not even r
 Wii U): the Scoreboard Add/Update record reads (data class slot 2), the ParticleType parameter table, the entity data type
 numbering, and the A2 base packet (PS3 has no constant getter for it).
 
+## Bridge leg: joining a console host (`minecraft joinconsole`, card prds#177)
+
+Facts from the 2026-11-07 capture read from the **joiner** side (`pia_plain_joiner_to_host.bin`, `game_j2h_*`, the Quay joiner
+against the real Wii U host), the prod nex log of 2026-11-10 and nex-protocols-common (our own server code). No game source.
+
+| Id | Fact (evidence) | Implemented in |
+| --- | --- | --- |
+| J1 | NAT phase as a console joiner: the host's two type 0 probes (12:39:52.0046/.0056) get type 1 replies from the joiner's RVCID with the token echoed (.0180); the joiner then sends its own two type 0 probes (.2685, flags 9, no source id), the host's type 1 replies come back (.2973) and the joiner's connection request follows 6 ms later (.3029). Nothing else is sent before that reply | `Joiner.kick`, `Joiner.message`; `TestJoinerAgainstRecordedHost` |
+| J2 | The joiner's connection request, connection response, session join (`01 fd 00 00` + its public address and port + ack id + 2) and acks match the recorded joiner byte for byte when given its identity (PID, CID, RVCID 4, public 10.89.2.24:56989, private 10.87.0.2:5316, ack id 0x7cacb3a5); the private location carries the private address | `Joiner`; `TestJoinerAgainstRecordedHost` |
+| J3 | Connected joiner keepalives: RTT request every 0.2 s for the first ten (0.45 ... 2.36 s), then every 2 s; clock request (own time, 8 zero bytes) every second; the host sends no clock requests, only answers; the joiner answers the host's RTT requests (byte 3 = 1, rest echoed), destination 1, source its PID | `Joiner.keepalives` |
+| J4 | Joiner game order: FE hello right after the mesh, E8 after the host's FF, 01 login after the host's 02, `87 <id> 0D x y z yaw pitch 00` after the host's D6 (x y z, has-look byte, yaw, pitch, VarInt teleport id; read 021ccd1c), then `0B x y z 1` and `E2 00` about every second and `00 03` every 49 ms (median). The FE template is the recorded one (name cleared; the host PID at 237 and 253; bytes after the name's NUL kept); the login is `01 0000013c` + name + the recorded tail, PlayerUIDs found by the walker | `lce.Client`, `tmpl/hello_fe.bin`, `tmpl/login_client.bin`; `TestClientAgainstRecordedJoiner`, `TestClientRecordedHostStream` (whole recorded host stream, `MC_CAPTURE_DIR`) |
+| J5 | A console joiner's station URL (nex log 2026-11-10 21:13:48): `address;port;CID` (= the PIA station CID)`;PID;R=0;RVCID;Ra..Rsp;natf;natm;probeinit=1;sid=15;stream=0;type=3` | `joinerStation` |
+| J6 | What a real join does on the server (nex-protocols-common `JoinGathering`, `RequestProbeInitiationExt`, `EndGatheringParticipation`): participant added, join message and tracking rows, 3001 subtype 1 (source and Param2 = the joiner, Param1 the gathering, Param3 the count) to every participant when flag 0x200 or 0x800 is set (console gatherings: 2560) else the owner; one InitiateProbe(joiner URL) to the host per host station URL; leave = 3001 subtype 8 | nex `titles/minecraft-wiiu/nex/bridge.go`; `TestParticipationEventBytes` |
+
+Not proven until a real console host is joined: that the host accepts a joiner with no NEX connection of its own (its RVCID
+0xFFF1 is no live connection, so the host's own RequestProbeInitiationExt back to it is dropped by NEX), the PlayerUID suffix
+bytes (each template keeps the recorded 4-byte tail; only the shared 16 bytes are ours), the FE hello's unmapped bytes, and
+whether the host expects anything from the joiner after the world sync beyond J4.
+
 ## Tests built from the capture
 
 `pia5.Joiner` (the joiner side of P3-P6, G1-G3) drives the host in `internal/relay/e2e_test.go` and `minecraft joinprobe`. It

@@ -31,6 +31,9 @@ func tmpl(name string) []byte {
 	return append([]byte(nil), b...)
 }
 
+// Tmpl returns a copy of an embedded template.
+func Tmpl(name string) []byte { return tmpl(name) }
+
 // Config is what a session needs from its service.
 type Config struct {
 	JavaAddr     string // the Java server, host:port

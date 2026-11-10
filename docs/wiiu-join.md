@@ -179,3 +179,31 @@ console host on 11-07 also echoed the joiner's own reported address), and the se
 two-station mesh from the service, so the console never sees WiiTest's station). Capture:
 scratch `minecraft-lce-captures/wiiu-real-20261110-2110/`.
 
+
+## 9. The bridge joins a console host (card prds#177)
+
+For cross-play a real Wii U hosts and the service joins it as a Wii U joiner on behalf of a player on another console (that player
+has a Wii U PID: every account has an identity on every network). `minecraft joinconsole` is that leg on its own.
+
+NEX side, server-side, because the player has no NEX connection: nex minecraft-wiiu serves on its health listener
+(`NEX_HTTP_ADDR`, 127.0.0.1:22432 on the box), bearer `MINECRAFT_INTERNAL_KEY`:
+
+- `GET /internal/minecraft/gatherings`: registered console gatherings whose host is connected, with host PID and station URLs.
+- `POST /internal/minecraft/join {gathering, pid, stations}`: adds the PID to the participants, sends the host the 3001
+  participation event (section 7: the host only accepts a station whose PID NEX said joined), sends the host InitiateProbe with the
+  joiner's station URL once per host URL (what the joiner's RequestProbeInitiationExt causes), and returns the session key (hex, never
+  logged) and the account's name.
+- `POST /internal/minecraft/leave {gathering, pid}`: removes it and sends 3001 end-participation.
+
+PIA side (`pia5.Joiner` with `Targets`): answer the host's probes, probe every host address (public and private) until a type 1
+reply comes back, take that address as the host, then the station handshake and the keepalives of provenance J1-J3. Game side
+(`lce.Client`): J4. The station address claimed must be one the console accepts (never an nncs address, section 5): on the box bind
+10.0.0.192 and claim 145.241.206.67; on the LAN the desktop's own address.
+
+```
+# box (product path)
+podman exec openpak-minecraft-core minecraft joinconsole -bind 10.0.0.192:0 -public 145.241.206.67
+# desktop on the console's LAN: tunnel nex, key in a 0600 file
+ssh -L 22432:127.0.0.1:22432 ubuntu@145.241.199.19 -N &
+minecraft joinconsole -keyfile <file>
+```

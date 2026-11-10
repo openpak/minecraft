@@ -1,7 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.2.11
 
+- `minecraft joinconsole` (prds#177): joins a world hosted on a real Wii U as a Wii U joiner on behalf of a player on another
+  console, and holds the session. NEX side through nex minecraft-wiiu's internal routes (v1.19.9); `pia5.Joiner` now does a console
+  joiner's NAT probe phase (probe every host address, connect after the first type 1 reply), answers the host's probes and RTT
+  requests and sends RTT and clock requests; `lce.Client` is the joiner's game layer (FE, E8, 01, 87/0D, 0B, E2, channel 3 ticks).
+  Checked byte for byte against the 11-07 recorded joiner (docs/provenance.md J1-J6, docs/wiiu-join.md section 9).
 - `internal/lce/walk` (prds#177): splits a length-less console game stream into packets for all 130 Wii U v688 ids (the 129 shared
   with PS3 01.84 plus A2) and translates packets between the Wii U and PS3 dialects (net version 0x0881 <-> 0x0884, PlayerUID
   20 <-> 28 bytes in 02, 01, 14, D1, E7, CE). Library only; nothing calls it yet. docs/provenance.md W1-W12.

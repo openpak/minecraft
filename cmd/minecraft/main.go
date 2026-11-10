@@ -19,12 +19,14 @@ func main() {
 		err = serve()
 	case "joinprobe":
 		err = joinprobe()
+	case "joinconsole":
+		err = joinconsole()
 	case "healthcheck":
 		err = healthcheck()
 	case "version":
 		fmt.Println(version)
 	default:
-		err = fmt.Errorf("usage: minecraft [serve|healthcheck|version]")
+		err = fmt.Errorf("usage: minecraft [serve|joinprobe|joinconsole|healthcheck|version]")
 	}
 	if err != nil {
 		slog.Error("minecraft", "err", err)
