@@ -62,3 +62,22 @@ the joiner sent its connection request 6 ms after the host's type 1 reply. v0.2.
 reply had type 0 and read as one more probe; v0.2.7 sends type 0 / type 1 with zero padding. A joiner answers a type 0 probe only
 while its entry for that address is fresh (`NatProbe::UpdateTargetAddress` returns 0 once a probe from the same address was seen), so
 it not answering our repeated probes is expected. Retest: the joiner should connect right after our first reply.
+
+## 5. The world needs its own IP: the game ignores the NAT check servers (2026-11-10, real Wii U)
+
+A real Wii U (friends list -> Join) got as far as the probe exchange and stopped: it sent type 0 probes to 22960 for 6 s, the service
+answered each with a correct type 1 reply (same layout as a console host's, token echoed), and the console never reacted. Its header
+echo timer (bytes 10-11) stayed `0000` the whole time, so it never accepted a single packet from us; it ended with 118-0513.
+
+Cause, in the game binary: `nn::pia::inet::NexFacade::UpdateNatServerAddress` (Minecraft.Client.rpx 0x03578c04) resolves
+`nncs1.app.nintendowifi.net` and `nncs2.app.nintendowifi.net` (strings at file offset 0x1cbe110) and hands both addresses to
+`InetInputStream::AddIgnoreAddress` (0x03589858, table at 0x10de4958). `InetInputStream::readFromSocket` (0x0358943c) compares
+every received datagram's source IP (IP only, not the port) with that table and drops a match before decryption (result 0x2c09).
+On OpenPak nncs1 is 145.241.199.19, the address the world used, so every PIA packet from the world was thrown away. Quay had the
+same mapping, which is why its joiner ignored our probes too; joinprobe has no such filter, so it always worked.
+
+Fix: the world has its own address. OCI private IP 10.0.0.192 (display name `minecraft`) on the primary VNIC with reserved public
+IP 145.241.206.67; `deploy/openpak-minecraft-ip.service` puts it on `enp0s6` at boot; the service binds `MINECRAFT_RELAY_ADDR=
+10.0.0.192:22960` (so replies and host-first probes leave from it), `MINECRAFT_RELAY_PUBLIC` and nex `MINECRAFT_SERVICE_STATION`
+are `145.241.206.67:22960`. Rule: never serve PIA from an address an nncs name resolves to (any Wii U/3DS PIA title).
+Capture: scratch `minecraft-lce-captures/wiiu-real-20261110/`.

@@ -78,12 +78,22 @@ func TestHostProbeToRepeatsUntilHeard(t *testing.T) {
 // shaped like the real host's reply to the same probe (0000000301282ef4000000007c8d09ea: RVCID 3, type 1, 3 garbage bytes, token).
 // The joiner only completes NAT traversal on a type 1 reply; v0.2.6 put a ms timer there, so its replies read as probes.
 func TestHostRepliesToRealJoinerProbe(t *testing.T) {
+	// 2026-11-07 Quay joiner, and the real Wii U on 2026-11-10 (14:23:57Z, decrypted from the box capture; same console, RVCID 4).
+	for probe, reply := range map[string]string{
+		"0000000400aaa640000000007c8d09ea": "0000fff001000000000000007c8d09ea",
+		"0000000400fac840000000230c1ee1d5": "0000fff001000000000000230c1ee1d5",
+	} {
+		testHostReplies(t, probe, reply)
+	}
+}
+
+func testHostReplies(t *testing.T, probeHex, replyHex string) {
 	c, _ := NewCipher(make([]byte, 16), 3)
 	var got []Message
 	h := NewHost(c, netip.MustParseAddrPort("127.0.0.1:22960"), 2000000001, func(_ netip.AddrPort, _ Header, _ [8]byte, msgs []Message) {
 		got = append(got, msgs...)
 	})
-	probe, _ := hex.DecodeString("0000000400aaa640000000007c8d09ea")
+	probe, _ := hex.DecodeString(probeHex)
 	h.HandleMessages(netip.MustParseAddrPort("10.0.0.5:5212"), Header{}, []Message{{Flags: 9, Proto: ProtoProbe, Port: 1, Payload: probe}})
 	var reqs, reps int
 	for _, m := range got {
@@ -93,7 +103,7 @@ func TestHostRepliesToRealJoinerProbe(t *testing.T) {
 		switch {
 		case m.Port == 1 && m.Payload[4] == probeRequest:
 			reqs++
-		case m.Port == 2 && hex.EncodeToString(m.Payload) == "0000fff001000000000000007c8d09ea":
+		case m.Port == 2 && hex.EncodeToString(m.Payload) == replyHex:
 			reps++
 		default:
 			t.Fatalf("unexpected probe message port %d payload %x", m.Port, m.Payload)

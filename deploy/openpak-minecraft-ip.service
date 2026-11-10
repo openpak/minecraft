@@ -1,0 +1,17 @@
+# System unit (root): puts the world's own private address on the primary VNIC. Copy to /etc/systemd/system/, enable --now.
+# The world needs a public IP that is neither nncs1 nor nncs2: the game's PIA (NexFacade::UpdateNatServerAddress ->
+# InetInputStream::AddIgnoreAddress) drops every packet from the NAT check servers' addresses, and nncs1 is 145.241.199.19.
+# OCI: private 10.0.0.192 (display name minecraft) on the primary VNIC, reserved public 145.241.206.67.
+[Unit]
+Description=OpenPak Minecraft world address (10.0.0.192 -> 145.241.206.67)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'ip -4 addr show dev enp0s6 | grep -q "10.0.0.192/" || ip addr add 10.0.0.192/32 dev enp0s6'
+ExecStop=-/usr/sbin/ip addr del 10.0.0.192/32 dev enp0s6
+
+[Install]
+WantedBy=multi-user.target

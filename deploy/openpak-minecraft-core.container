@@ -12,11 +12,11 @@ AutoUpdate=registry
 Network=openpak.network
 # internal HTTP (the nex title registers the world's leg), loopback on the host
 PublishPort=127.0.0.1:20270:20270
-# Wii U game transport, public (consoles dial it)
+# Wii U game transport, public (consoles dial it). Its own address, never an nncs1/nncs2 one: openpak-minecraft-ip.service
 PublishPort=22960:22960/udp
 Volume=openpak-minecraft-world:/data
 EnvironmentFile=%h/openpak/deploy/.env
-Environment=MINECRAFT_HTTP_ADDR=:20270 MINECRAFT_RELAY_ADDR=:22960 MINECRAFT_RELAY_PUBLIC=145.241.199.19:22960 MINECRAFT_JAVA_XMX=1g
+Environment=MINECRAFT_HTTP_ADDR=:20270 MINECRAFT_RELAY_ADDR=10.0.0.192:22960 MINECRAFT_RELAY_PUBLIC=145.241.206.67:22960 MINECRAFT_JAVA_XMX=1g
 HealthCmd=["/minecraft","healthcheck"]
 
 [Service]
