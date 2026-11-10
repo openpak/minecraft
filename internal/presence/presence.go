@@ -37,6 +37,16 @@ type Reporter struct {
 	ResolveURL string // nn-account's /internal/resolve/pid base, for Wii U PIDs
 	ResolveKey string
 	HTTP       *http.Client
+
+	mu   sync.Mutex
+	live map[uint32]*player
+}
+
+// player is one PID's presence: the core keeps one row per account and title, so two world sessions of the same PID (a console
+// rejoining before its old session timed out, joinprobe restarted) share one publisher and only the last to leave ends it.
+type player struct {
+	n     int
+	leave func()
 }
 
 // Dial connects to the account core's gRPC (addr host:port) with the internal key.
@@ -80,11 +90,41 @@ func (r *Reporter) account(ctx context.Context, pid uint32) (string, error) {
 }
 
 // Join starts publishing a Wii U player (by NEX PID) as being in the world and returns the function that ends it. The lease is
-// renewed in the background, so a service that dies takes the presence with it within the lease.
+// renewed in the background, so a service that dies takes the presence with it within the lease. Joins of a PID that is already
+// published share it (before v0.2.9 an old session's leave expired the row its successor had re-registered).
 func (r *Reporter) Join(pid uint32) (leave func()) {
 	if r == nil || r.Sessions == nil {
 		return func() {}
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.live == nil {
+		r.live = map[uint32]*player{}
+	}
+	p := r.live[pid]
+	if p == nil {
+		p = &player{leave: r.publish(pid)}
+		r.live[pid] = p
+	}
+	p.n++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			r.mu.Lock()
+			p.n--
+			last := p.n == 0
+			if last {
+				delete(r.live, pid)
+			}
+			r.mu.Unlock()
+			if last {
+				p.leave()
+			}
+		})
+	}
+}
+
+func (r *Reporter) publish(pid uint32) (leave func()) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(1)

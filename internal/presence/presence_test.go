@@ -60,3 +60,29 @@ func TestJoinLeave(t *testing.T) {
 }
 
 func TestNilReporter(t *testing.T) { (*Reporter)(nil).Join(1)() }
+
+// Two world sessions of one PID (joinprobe restarted while the old session was still timing out) publish once, and the old
+// session's leave must not end the presence of the new one (2026-11-10: "left" from the old session cleared WiiTest).
+func TestSamePIDTwice(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"found":true,"account_id":"acct-1"}`))
+	}))
+	defer srv.Close()
+	f := &fake{}
+	r := &Reporter{Sessions: f, ResolveURL: srv.URL, ResolveKey: "k"}
+	old := r.Join(1358756791)
+	cur := r.Join(1358756791)
+	time.Sleep(200 * time.Millisecond)
+	old()
+	old()
+	f.mu.Lock()
+	reg, exp := len(f.reg), f.expire
+	f.mu.Unlock()
+	if reg != 1 || exp != 0 {
+		t.Fatalf("after the old leave: registers=%d expires=%d, want 1 and 0", reg, exp)
+	}
+	cur()
+	if f.expire != 1 {
+		t.Fatalf("after the last leave: expires=%d, want 1", f.expire)
+	}
+}

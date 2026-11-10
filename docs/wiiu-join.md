@@ -81,3 +81,34 @@ IP 145.241.206.67; `deploy/openpak-minecraft-ip.service` puts it on `enp0s6` at 
 10.0.0.192:22960` (so replies and host-first probes leave from it), `MINECRAFT_RELAY_PUBLIC` and nex `MINECRAFT_SERVICE_STATION`
 are `145.241.206.67:22960`. Rule: never serve PIA from an address an nncs name resolves to (any Wii U/3DS PIA title).
 Capture: scratch `minecraft-lce-captures/wiiu-real-20261110/`.
+
+## 6. First real-console probe exchange that worked, and the timeout that still ends it (2026-11-10 14:49, 118-0502)
+
+On the console's second try after v0.2.8, our PIA packets were accepted. At 14:49:36.832 the console (RVCID 2) probed 22960
+(`0000000200fac840 00000039548b665d`), the service replied type 1 at .833 with the token echoed, and the console answered our own probe
+with a type 1 reply whose header echo field held our timer. It stopped probing after that one pair. About 100 ms later it sent
+`EndParticipation` (MatchMakingExt 50/1) and then `SendReport`, and showed 118-0502. No connection request was sent.
+
+What failed was the console's time budget, not the protocol. `InetConnectStationJob::PrepareNatTraversal` (rpx 0x03587600) starts a
+15000 ms deadline (`li r0,0x3a98`) once the host URL is known. `WaitForNatTraversalStarted` (0x0358783c) and
+`WaitForNatTraversalCompleted` (0x03587ba0) then wait for `IsTraversed`. On timeout they call `NotifyLeave` with a result chosen by
+the NAT mappings (0x6442 when both sides are EIM). The per-probe window is NexFacade 0x74 = 5000 ms, plus 0x78 = 1500 ms for each EDM
+side (constructor 0x03575de8). GetSessionURLs was answered at 21.935, and `EndParticipation` arrived at 36.974: 15.04 s later.
+
+Where the 15 s went (box capture, `minecraft-lce-captures/wiiu-real-20261110-1449/`):
+
+| When (14:49) | What |
+| --- | --- |
+| 14.036 to 21.934 | The console's JoinMatchmakeSessionWithParam was answered in 10 ms. The console retransmitted it at 16, 18 and 20 s and acknowledged our reply only at 21.934. |
+| 23.5 to 28.6 | NAT check, three rounds. nncs2's first reply took 560 ms on the secondary box, which was swapping. |
+| 32.607 / 32.631 | ReplaceURL and RequestProbeInitiationExt were answered at once, and InitiateProbe was sent at 32.633. The console retransmitted both at 34.6 and 36.6 and acknowledged at 36.712. |
+| 36.832 | The console's first probe, 4.2 s after InitiateProbe. The exchange then took 57 ms. |
+
+The service and nex answer each request in under 1 ms, and the console's upstream packets arrived on time. Packets from the box to
+the house took 4 to 8 s, and only in these windows. The owner's PS3 on the same public address (np-community TCP 5223) shows the same
+gaps in its kernel TCP acks: data sent at 09.903 was acked at 17.400, and data sent at 31.307 was acked at 36.718. Kernel acks do not
+depend on any game, so both consoles waited on the same delayed downstream path: the home link, or something between the box and it.
+The earlier attempt at 14:23 had no such delay: requests were answered and acknowledged within 30 to 70 ms, and the console probed at
+once (its packets were still ignored because of section 5).
+
+Retry when nothing else at home is downloading. With normal latency, the whole sequence fits in the budget with about 10 s to spare.

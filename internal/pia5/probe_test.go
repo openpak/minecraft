@@ -78,10 +78,13 @@ func TestHostProbeToRepeatsUntilHeard(t *testing.T) {
 // shaped like the real host's reply to the same probe (0000000301282ef4000000007c8d09ea: RVCID 3, type 1, 3 garbage bytes, token).
 // The joiner only completes NAT traversal on a type 1 reply; v0.2.6 put a ms timer there, so its replies read as probes.
 func TestHostRepliesToRealJoinerProbe(t *testing.T) {
-	// 2026-11-07 Quay joiner, and the real Wii U on 2026-11-10 (14:23:57Z, decrypted from the box capture; same console, RVCID 4).
+	// 2026-11-07 Quay joiner, and the real Wii U on 2026-11-10 (14:23:57Z and 14:49:36Z, decrypted from the box captures).
 	for probe, reply := range map[string]string{
 		"0000000400aaa640000000007c8d09ea": "0000fff001000000000000007c8d09ea",
 		"0000000400fac840000000230c1ee1d5": "0000fff001000000000000230c1ee1d5",
+		// 2026-11-10 14:49:36.832Z, real Wii U (RVCID 2) to 145.241.206.67: the console accepted this exact reply (sent 36.833)
+		// and its own reply to our probe echoed our timer, so the v0.2.8 address and the reply bytes are right.
+		"0000000200fac84000000039548b665d": "0000fff00100000000000039548b665d",
 	} {
 		testHostReplies(t, probe, reply)
 	}

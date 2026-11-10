@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.9
+
+- Presence is shared per Wii U PID: two world sessions of one PID (a joinprobe restart, or a console that rejoins before its old
+  session timed out) publish one core session, and only the last to leave ends it. Before, the old session's leave expired the row
+  its successor held (the core keeps one row per account and title), so the player dropped off the Join tab.
+- docs/wiiu-join.md section 6: the 2026-11-10 14:49 real Wii U join. The console accepted our probes and replies; the join timed out
+  because packets to the house arrived 4 to 8 s late. Probe test pinned to that exchange.
+
 ## 0.2.6
 
 - `POST /internal/probe` keeps probing the joiner every 250 ms for up to 20 s until the joiner is heard from, then probes once more. A
