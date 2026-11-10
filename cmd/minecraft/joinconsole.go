@@ -19,7 +19,7 @@ import (
 // it returns is never printed.
 func joinconsole() error {
 	fs := flag.NewFlagSet("joinconsole", flag.ExitOnError)
-	nexURL := fs.String("nex", env("MINECRAFT_NEX_URL", "http://127.0.0.1:22432"), "nex minecraft-wiiu health listener (internal routes)")
+	nexURL := fs.String("nex", env("MINECRAFT_NEX_URL", "http://127.0.0.1:22742"), "nex minecraft-wiiu health listener (internal routes)")
 	keyfile := fs.String("keyfile", "", "file holding MINECRAFT_INTERNAL_KEY (default: the environment variable)")
 	list := fs.Bool("list", false, "list console-hosted gatherings and exit")
 	gid := fs.Uint("gathering", 0, "gathering to join (0: the first listed)")

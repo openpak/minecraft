@@ -186,7 +186,7 @@ For cross-play a real Wii U hosts and the service joins it as a Wii U joiner on 
 has a Wii U PID: every account has an identity on every network). `minecraft joinconsole` is that leg on its own.
 
 NEX side, server-side, because the player has no NEX connection: nex minecraft-wiiu serves on its health listener
-(`NEX_HTTP_ADDR`, 127.0.0.1:22432 on the box), bearer `MINECRAFT_INTERNAL_KEY`:
+(`NEX_HTTP_ADDR`, 127.0.0.1:22742 on the box), bearer `MINECRAFT_INTERNAL_KEY`:
 
 - `GET /internal/minecraft/gatherings`: registered console gatherings whose host is connected, with host PID and station URLs.
 - `POST /internal/minecraft/join {gathering, pid, stations}`: adds the PID to the participants, sends the host the 3001
@@ -204,6 +204,6 @@ reply comes back, take that address as the host, then the station handshake and 
 # box (product path)
 podman exec openpak-minecraft-core minecraft joinconsole -bind 10.0.0.192:0 -public 145.241.206.67
 # desktop on the console's LAN: tunnel nex, key in a 0600 file
-ssh -L 22432:127.0.0.1:22432 ubuntu@145.241.199.19 -N &
+ssh -L 22742:127.0.0.1:22742 ubuntu@145.241.199.19 -N &
 minecraft joinconsole -keyfile <file>
 ```
