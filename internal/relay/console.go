@@ -157,6 +157,15 @@ func (cj ConsoleJoin) Run(ctx context.Context) (ConsoleResult, error) {
 			targets = append(targets, a)
 		}
 	}
+	// The public URL can carry the console's NEX port rather than its PIA port (real Wii U 2026-11-11: 5224 listed, PIA on 5254),
+	// and home routers mostly keep the local port, so also try every public address with every listed port.
+	for _, a := range append([]netip.AddrPort(nil), targets...) {
+		for _, b := range append([]netip.AddrPort(nil), targets...) {
+			if c := netip.AddrPortFrom(a.Addr(), b.Port()); !a.Addr().IsPrivate() && !containsAddr(targets, c) {
+				targets = append(targets, c)
+			}
+		}
+	}
 	if len(targets) == 0 {
 		return res, fmt.Errorf("gathering %d: no host station address in %q", g.Gathering, g.Stations)
 	}

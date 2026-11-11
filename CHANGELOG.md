@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.13
+
+- `joinconsole` (prds#177): also probes the host's public address on its private station's port from the start, so traversal
+  does not depend on the host's first probes arriving (second real Wii U attempt 2026-11-11: none arrived in 20 s).
+
 ## 0.2.12
 
 - `joinconsole` (prds#177): the joiner also probes the address the host's own probes come from. The public station URL NEX
