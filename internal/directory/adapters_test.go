@@ -131,12 +131,15 @@ func TestAdaptersTalkToTheServices(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	want := "DELETE /internal/bridge/presence/acct-wiiu-host"
-	found := false
-	for _, c := range calls {
-		found = found || c == want
-	}
-	if !found {
-		t.Fatalf("no %q in %v", want, calls)
+	// a game's end takes everything of it away at once, on both sides: the PS3 room and the host's PS3 presence, the Wii U gathering and the
+	// host's core presence (2026-11-11 test: both went within the same second of "game gone")
+	for _, want := range []string{"DELETE /internal/bridge/presence/acct-wiiu-host", "DELETE /internal/bridge/rooms/wiiu:5", "DELETE /internal/minecraft/bridged/ps3:room-1"} {
+		found := false
+		for _, c := range calls {
+			found = found || c == want
+		}
+		if !found {
+			t.Fatalf("no %q in %v", want, calls)
+		}
 	}
 }

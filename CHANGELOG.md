@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.2
+
+- PS3 presence blob and session data built like a real host's (prds#177): the 56-byte presence blob now equals, byte for byte, the blob the owner's real
+  PS3 published while hosting (2026-11-11 14:58; server id is a u16, +0xa8 and +0xac of the session data are copied, the name comes from
+  session +0x02..+0x13). The session data writes the host name at +0x02 too (the real host does; the 14:12 capture had it blank), so the blob
+  and the room list carry the bridged host's own name. Open: the real blobs' @0x18 is not the room id (docs/session-mapping.md section 3).
+- Tests pin that a game's end takes the PS3 room, the PS3 presence, the Wii U gathering and the Wii U presence away together.
+
 ## 0.3.1
 
 - PS3 transport and the `joinps3` probe (prds#177), built from `research/minecraft-lce/ps3-0184-p2p-transport-2026-11-11.md` (static analysis; no

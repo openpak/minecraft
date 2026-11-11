@@ -26,6 +26,7 @@ const PS3NetVersion = 0x0884
 const (
 	ps3ExtLen     = 184
 	ps3Name       = 0x14 // host name, NUL-padded, 17 bytes (to the next used byte, 0x25)
+	ps3Name2      = 0x02 // the same name again, 17 bytes, then 0x80 at +0x13; the presence blob copies bytes +0x02..+0x13
 	ps3NameLen    = 17
 	ps3Vis        = 0xa7 // low byte of the u16 at 0xa6 (0x3c9d in the capture); low nibble 0xf = friends of friends (guess, by the Wii U twin)
 	ps3Joinable   = 0xad // 1 in the capture; the 01.84 room list keeps a room only when it is non-zero
@@ -65,6 +66,8 @@ func cstr(b []byte) string {
 func (PS3Codec) External(s Settings, players int) []byte {
 	b := goldExternal()
 	putName(b[ps3Name:ps3Name+ps3NameLen], s.HostName)
+	putName(b[ps3Name2:ps3Name2+ps3NameLen], s.HostName) // a real host writes both (2026-11-11 14:58 capture); the 14:12 one had the first blank
+	b[ps3Name2+ps3NameLen] = 0x80
 	b[ps3Vis] = b[ps3Vis]&0xf0 | 0x0d
 	if s.Visibility == FriendsOfFriend {
 		b[ps3Vis] = b[ps3Vis]&0xf0 | 0x0f
@@ -99,15 +102,23 @@ func (PS3Codec) Table(s Settings, account string) []byte {
 }
 
 // Presence is the 56-byte presence data blob the game publishes with sceNpBasicSetPresenceDetails2 and filters friends by. Layout from
-// the 01.84 builder (research ps3-0184-vs-wiiu §7), values from this game's own session data. Not seen on the wire yet: a real console's
-// presence stanza is not captured (np-community v0.4.11 logs it on the next real hosting).
+// the 01.84 builder (research ps3-0184-vs-wiiu §7) and checked byte for byte against the blob the owner's real PS3 published while hosting
+// (2026-11-11 14:58, np-community relayed it; TestPS3PresenceEqualsRealBlob): name = session +0x02..+0x13, server id u16 @0x20, session +0xa8
+// u32 @0x24, version @0x28, session +0xac @0x2a, @0x2b = 0 when joinable, nibbles of +0xb0 @0x2c/0x2d, +0xb4 u32 @0x30.
+// NOT resolved: the real blobs carry 00 01 00 01 00 00 00 01 at @0x18 in both captures, which is not the room id np-matching2 handed that
+// console (0x0001 + the first 48 bits of the session id). The room id is written here because a friend needs it to JoinRoom; if a real friend
+// cannot join, this field is the first suspect (the next hosting's presence is logged in full by np-community, "NP presence xml").
 func (PS3Codec) Presence(s Settings, roomID uint64, ext []byte) []byte {
 	b := make([]byte, ps3PresentLen)
-	putName(b[:18], s.HostName)
+	copy(b[:18], ext[ps3Name2:ps3Name2+18])
 	binary.BigEndian.PutUint64(b[0x18:], roomID)
-	binary.BigEndian.PutUint32(b[0x20:], 1) // server id
+	binary.BigEndian.PutUint16(b[0x20:], 1) // server id
+	copy(b[0x24:0x28], ext[0xa8:0xac])
 	binary.BigEndian.PutUint16(b[0x28:], PS3NetVersion)
-	b[0x2b] = 0 // 01.02 lists a friend only when this byte is 0
+	b[0x2a] = ext[0xac]
+	if ext[ps3Joinable] == 0 {
+		b[0x2b] = 1 // a game that is not joinable is the one a friend's list drops
+	}
 	b[0x2c] = ext[ps3Nibbles] >> 4
 	b[0x2d] = ext[ps3Nibbles] & 0x0f
 	copy(b[0x30:0x34], ext[0xb4:0xb8])
