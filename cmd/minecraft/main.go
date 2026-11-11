@@ -21,12 +21,14 @@ func main() {
 		err = joinprobe()
 	case "joinconsole":
 		err = joinconsole()
+	case "joinps3":
+		err = joinps3()
 	case "healthcheck":
 		err = healthcheck()
 	case "version":
 		fmt.Println(version)
 	default:
-		err = fmt.Errorf("usage: minecraft [serve|joinprobe|joinconsole|healthcheck|version]")
+		err = fmt.Errorf("usage: minecraft [serve|joinprobe|joinconsole|joinps3|healthcheck|version]")
 	}
 	if err != nil {
 		slog.Error("minecraft", "err", err)

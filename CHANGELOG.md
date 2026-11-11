@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.1
+
+- PS3 transport and the `joinps3` probe (prds#177), built from `research/minecraft-lce/ps3-0184-p2p-transport-2026-11-11.md` (static analysis; no
+  PS3 game packet has ever been captured, so the first hardware run confirms or corrects it):
+  - `internal/ps3p2p`: the kernel's kind-6 datagram (`ff c6 01 01`, seed, 4-byte HMAC-SHA1 over the ciphertext, AES-128-CBC with the
+    seed x4 IV and the partial-block rule; each side opens with its own skey and seals with the peer's), the librudp layer (class-2
+    frames, port = pad + 1, simultaneous open, cumulative acks, go-back-N retransmit, keepalive) and the `{u16 len, u16 kind}` message layer
+    (kind 1 plain, kind 2 acked by an empty kind 3, 1,346-byte pieces). Every guessed constant is in `guess.go`. Tests: three independent
+    crypto vectors (openssl + Python), the SYN frame, a two-endpoint loopback through the real crypto, retransmit after loss.
+  - `internal/ps3m2`: a headless PS3 Matching2 client (trimmed copy of np-matching2's `wire` and `client`), with parsers for the search list,
+    the external attrs, the member list and the player-table attrs 0x57/0x58. `internal/rtsig`: copy of the Terraria RT/udpp2p signalling
+    package (verified against a real PS3), plus `PeerSKey`/`HostCandidate`. Copied, not shared: both are `internal` packages of other modules.
+  - `minecraft joinps3`: signs in to RT, searches, reads the external attrs, joins the host's room with member attr 0x59, signals to
+    Established, opens RUDP, waits for the host to write our table entry, and only then sends the 32-byte hello (and E8). It records
+    everything to `-out`: every `ff c6` datagram raw and decrypted, every RUDP packet and message, hex dumps, the game bytes each way
+    (`.rx.bin` walks with `internal/lce/walk` as PS3), the skeys in a 0600 `.keys` file. Never aborts on an odd packet; prints a SUMMARY line
+    (signalling, established, rudp connected, table entry, hello, first game packet). Runner: `scratch/ps3-signaling-2026-11-09/run-minecraft.sh`.
+
 ## 0.3.0
 
 - Session directory (prds#177, `internal/directory`, `docs/session-mapping.md`): a game a player hosts on one console is advertised on every other
