@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/openpak/minecraft/internal/directory"
 	"github.com/openpak/minecraft/internal/httplog"
 	"github.com/openpak/minecraft/internal/javaserver"
 	"github.com/openpak/minecraft/internal/presence"
@@ -125,6 +126,11 @@ func serve() error {
 		}
 		w.Write([]byte("ok\n"))
 	}))
+	if dir := startDirectory(ctx, pres); dir != nil {
+		mux.HandleFunc("GET /internal/directory", authed(func(w http.ResponseWriter, _ *http.Request) {
+			json.NewEncoder(w).Encode(map[string]any{"games": dir.Games(), "joins": dir.RecentJoins()})
+		}))
+	}
 	mux.HandleFunc("GET /internal/legs", authed(func(w http.ResponseWriter, _ *http.Request) { json.NewEncoder(w).Encode(rl.Legs()) }))
 	srv := &http.Server{Addr: env("MINECRAFT_HTTP_ADDR", ":20270"), Handler: httplog.Middleware(mux), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
@@ -139,6 +145,28 @@ func serve() error {
 		return err
 	}
 	return nil
+}
+
+// startDirectory runs the cross-play session directory (prds#177) when the Wii U and PS3 internal surfaces are configured: a game a
+// player hosts on one console shows on the other's network under the host's name. MINECRAFT_NEX_URL and MINECRAFT_INTERNAL_KEY reach nex
+// minecraft-wiiu; MINECRAFT_PS3_MATCHING_URL, MINECRAFT_PS3_COMMUNITY_URL and MINECRAFT_PS3_KEY reach np-matching2 and np-community
+// (their NP_BRIDGE_KEY). Without them nothing runs, as before.
+func startDirectory(ctx context.Context, pres *presence.Reporter) *directory.Directory {
+	nexURL, matching, community := os.Getenv("MINECRAFT_NEX_URL"), os.Getenv("MINECRAFT_PS3_MATCHING_URL"), os.Getenv("MINECRAFT_PS3_COMMUNITY_URL")
+	if nexURL == "" || matching == "" || community == "" {
+		slog.Warn("session directory off: set MINECRAFT_NEX_URL, MINECRAFT_PS3_MATCHING_URL and MINECRAFT_PS3_COMMUNITY_URL")
+		return nil
+	}
+	wiiu := &directory.WiiU{Nex: nexURL, NexKey: os.Getenv("MINECRAFT_INTERNAL_KEY"), ResolveURL: env("MINECRAFT_RESOLVE_URL", "http://openpak-nn-account:20050"),
+		ResolveKey: os.Getenv("MINECRAFT_RESOLVE_KEY")}
+	if pres != nil && pres.Sessions != nil {
+		wiiu.Presence = directory.CorePresence{Sessions: pres.Sessions}
+	}
+	ps3 := &directory.PS3{Matching: matching, Community: community, Key: os.Getenv("MINECRAFT_PS3_KEY"), Title: env("MINECRAFT_PS3_TITLE", "NPWR05636_00")}
+	d := &directory.Directory{Adapters: []directory.Adapter{wiiu, ps3}}
+	go d.Run(ctx, 5*time.Second)
+	slog.Info("session directory on", "platforms", "wiiu,ps3")
+	return d
 }
 
 func healthcheck() error {

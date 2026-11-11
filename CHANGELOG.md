@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0
+
+- Session directory (prds#177, `internal/directory`, `docs/session-mapping.md`): a game a player hosts on one console is advertised on every other
+  console network, under the hosting player's name, through that network's own discovery; the service is an invisible bridge. One
+  `Game` per player-hosted game (host account, platform, native session reference, neutral settings, players, state) fed and consumed
+  through a two-halved `Adapter` (source: `Hosted`; sink: `Advertise`/`Withdraw`; `Joins` reports join attempts and handshake data back).
+  Adapters for the Wii U (nex minecraft-wiiu `/internal/minecraft/*`, presence in the account core for nn-friends) and the PS3
+  (np-matching2 `/internal/bridge/*`, np-community presence and signalling); codecs checked against the real PS3 01.84 host's bytes
+  (2026-11-11 log) and the Wii U capture row. A new platform is one more adapter. Game traffic between consoles is not part of it.
+- `minecraft serve` starts the directory when `MINECRAFT_NEX_URL`, `MINECRAFT_PS3_MATCHING_URL` and `MINECRAFT_PS3_COMMUNITY_URL` are set
+  (also `MINECRAFT_PS3_KEY`, `MINECRAFT_PS3_TITLE`); `GET /internal/directory` shows its games and the last 200 joins.
+
 ## 0.2.13
 
 - `joinconsole` (prds#177): also probes the host's public address on its private station's port from the start, so traversal
