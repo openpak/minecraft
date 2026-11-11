@@ -1,6 +1,6 @@
 // Copied from common/terraria/internal/rtsig (github.com/openpak/terraria; the Terraria signalprobe is verified byte for byte against
 // a real PS3). Copied rather than shared: both are internal packages of two modules, and np-common is not a dependency of this one.
-// Only change: Participant.PeerSKey and HostCandidate. Keep in step by hand until the pieces move into np-common.
+// Only change: none since v0.3.3 (Participant.PeerSKey and HostCandidate are now in both). Keep in step by hand until the pieces move into np-common.
 
 // Package rtsig is the NP RT signaling exchange (udpp2p/netinfo) a relay peer speaks to a PS3 host so the
 // host's game reaches EXT_MUTUAL_ACTIVATED and initiates cellRudp (research/ps3/matching2-protocol.md §24-25).
@@ -45,6 +45,9 @@ type Stanza struct {
 	NetNPStatus         string
 	NetNPPort           uint16
 	NetNAT              string
+	// iq type="error": <error><x xmlns="http://playstation.net/np/rt/error" code="0e" source="client"/></error>. vsh writes the low
+	// byte of its SceNpSignaling error (FUN_001eb710): 0e = 0x8002a80e, no connection with these NpIds and sids (FUN_001e6c40).
+	ErrCode, ErrSource string
 }
 
 type xmlQuery struct {
@@ -78,6 +81,12 @@ type xmlIQ struct {
 	From    string    `xml:"from,attr"`
 	To      string    `xml:"to,attr"`
 	Query   *xmlQuery `xml:"query"`
+	Error   *struct {
+		X struct {
+			Code   string `xml:"code,attr"`
+			Source string `xml:"source,attr"`
+		} `xml:"x"`
+	} `xml:"error"`
 }
 
 // Parse reads one signaling iq stanza.
@@ -86,10 +95,14 @@ func Parse(s string) (Stanza, error) {
 	if err := xml.Unmarshal([]byte(s), &iq); err != nil {
 		return Stanza{}, err
 	}
-	if iq.Query == nil {
-		return Stanza{Kind: iq.Kind, ID: iq.ID, From: iq.From, To: iq.To}, nil
+	st := Stanza{Kind: iq.Kind, ID: iq.ID, From: iq.From, To: iq.To}
+	if iq.Error != nil {
+		st.ErrCode, st.ErrSource = iq.Error.X.Code, iq.Error.X.Source
 	}
-	st := Stanza{Kind: iq.Kind, ID: iq.ID, From: iq.From, To: iq.To, NS: iq.Query.NS, Action: iq.Query.Action}
+	if iq.Query == nil {
+		return st, nil
+	}
+	st.NS, st.Action = iq.Query.NS, iq.Query.Action
 	u16 := func(v string) uint16 { n, _ := strconv.ParseUint(v, 10, 16); return uint16(n) }
 	st.SID, st.PSID, st.NATType = u16(iq.Query.SID), u16(iq.Query.PSID), u16(iq.Query.NATType)
 	if iq.Query.SKey != "" {

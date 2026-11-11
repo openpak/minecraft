@@ -26,6 +26,9 @@ type Participant struct {
 	Send            func(string) error
 	OnMutual        func(host Candidate)
 	OnProbe         func(host Candidate) // probing should start toward this candidate
+	OnReject        func(st Stanza)      // the host answered one of our sets with an iq error (st.ErrCode); logged, never parsed as a fresh action
+
+	hostPinned bool // HostJID comes from the host's Matching2 NpId (SetHostNpID): never replaced by a stanza's stamped "from"
 
 	peerSID   uint16
 	peerKey   []byte
@@ -70,6 +73,21 @@ func (p *Participant) start() error {
 		cs = []Candidate{p.Self}
 	}
 	return p.send(Offer(p.nextID(), p.HostJID, p.SelfJID, p.SID, p.peerSID, p.SKey, 1, cs))
+}
+
+// SetHostNpID addresses the host by the JID that maps back to its own NpId (the 24-byte Matching2 form: the room owner of a search
+// reply, or a member's 0x0b). The console keys a connection it activates on that NpId, and vsh rejects an offer with psid != 0
+// whose to/from NpIds match no connection (0x8002a80e, iq error code "0e"). np-community stamps "from" with the console's stream
+// JID, whose domain (pt.pt) is not its NpId opt (ptnp), so a stanza's "from" cannot be used for that.
+func (p *Participant) SetHostNpID(npid []byte) error {
+	jid, err := JIDFromNpID(npid)
+	if err != nil {
+		return err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.HostJID, p.hostPinned = jid, true
+	return nil
 }
 
 // ProbeOK reports the UDP probe phase succeeded; the accept can go out.
@@ -148,6 +166,15 @@ func (p *Participant) checkMutual() {
 func (p *Participant) Handle(st Stanza) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// An iq error echoes our own query back (action, sids, our candidates) with an <error> child: it is the peer refusing one of
+	// our sets, never its own action. Treated as an offer it made the probe adopt its own candidates and probe itself (mc3).
+	// No ack: an error is not a set.
+	if st.Kind == "error" {
+		if p.OnReject != nil {
+			p.OnReject(st)
+		}
+		return nil
+	}
 	// A result without an action acks one of our sets (bare from firmware, or with an empty
 	// udpp2p query once relayed as our Ack is): offer first, then accept.
 	if st.Kind == "result" && st.Action == "" && st.NS != NSNetinfo {
@@ -178,7 +205,7 @@ func (p *Participant) Handle(st Stanza) error {
 		if !p.offerOut {
 			// Host-initiated (its game's ActivateConnection toward our Matching2 member NpId): adopt the
 			// JIDs it used, so our offer, probes and the host's connection key on the same NpIds.
-			if _, err := NpIDFromJID(st.From); err == nil {
+			if _, err := NpIDFromJID(st.From); err == nil && !p.hostPinned {
 				p.HostJID = st.From
 			}
 			if _, err := NpIDFromJID(st.To); err == nil {

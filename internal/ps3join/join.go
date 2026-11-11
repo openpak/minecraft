@@ -172,6 +172,9 @@ func (s *probe) run(ctx context.Context) error {
 	s.p.Send = func(x string) error { rec.Logf("RT>>", "%s", x); return cl.Send(x) }
 	cl.Log = func(x string) { rec.Logf("RT<<", "%s", x) }
 	s.p.OnProbe = s.onProbe
+	s.p.OnReject = func(st rtsig.Stanza) {
+		rec.Logf("SIGNAL", "the host REJECTED our %s (iq %s): error code %s source %s (0e = no connection with these NpIds/sids)", st.Action, st.ID, st.ErrCode, st.ErrSource)
+	}
 	s.p.OnMutual = func(c rtsig.Candidate) {
 		rec.Logf("SIGNAL", "MUTUAL ACTIVATED, host endpoint %s:%d", c.Address, c.Port)
 		s.progress(func(p *Progress) { p.Signalling, p.Established = true, true }, "mutual activation")
@@ -278,6 +281,12 @@ func (s *probe) matching2(ticket, pass []byte) (*ps3m2.Client, error) {
 	}
 	if pick == nil {
 		return nil, errors.New("no matching room (is the host online and hosting?)")
+	}
+	// Address the host by its own NpId, before JoinRoom: the console's offer toward us comes before the join reply.
+	if err := s.p.SetHostNpID(pick.OwnerNpID); err != nil {
+		rec.Logf("SIGNAL", "owner NpId %x: %v (keeping host JID %s)", pick.OwnerNpID, err, s.p.HostJID)
+	} else {
+		rec.Logf("SIGNAL", "host JID %s, from the room owner's NpId", s.p.HostJID)
 	}
 	low := binary.BigEndian.AppendUint16(nil, pick.ID[2])
 	// step 2: the discovery data the game checks before it joins (both external attrs, version 0x0884, +0xad and +0xaf non-zero)

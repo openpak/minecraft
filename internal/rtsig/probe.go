@@ -47,6 +47,26 @@ func NpIDFromJID(jid string) ([]byte, error) {
 	return b, nil
 }
 
+// JIDFromNpID is the inverse of NpIDFromJID for a 24-byte Matching2 NpId (online id 16, opt 8): "PS3Test" + "ptnpps3" ->
+// "PS3Test@pt.np.np.playstation.net/ps3". np-community routes on the online id, so any such domain reaches the console.
+func JIDFromNpID(npid []byte) (string, error) {
+	if len(npid) < 24 {
+		return "", errors.New("rtsig: short NpId")
+	}
+	node := strings.TrimRight(string(npid[:16]), "\x00")
+	opt := npid[16:24]
+	res := strings.TrimRight(string(opt[4:8]), "\x00")
+	for _, c := range opt[:4] {
+		if c < 'a' || c > 'z' {
+			return "", errors.New("rtsig: NpId has no realm opt")
+		}
+	}
+	if node == "" || res == "" {
+		return "", errors.New("rtsig: NpId without online id or resource")
+	}
+	return node + "@" + string(opt[0:2]) + "." + string(opt[2:4]) + ".np.playstation.net/" + res, nil
+}
+
 // ProbePacket builds a type-1 probe from our connection: own NpId at +0x04, peer NpId at +0x24.
 func ProbePacket(ownNpID, peerNpID []byte, ownSID, peerSID uint16, now uint64) []byte {
 	out := make([]byte, probeLen)

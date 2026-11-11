@@ -324,9 +324,10 @@ func (c *Client) Close() {
 
 // SearchItem is one room of a 0x1200 reply: the room id's low 48 bits as three u16, the owner's online id and the raw item.
 type SearchItem struct {
-	ID    [3]uint16
-	Owner string
-	Raw   []byte
+	ID        [3]uint16
+	Owner     string
+	OwnerNpID []byte // 24 bytes: online id + opt, the console's own (np-matching2 >= v0.2.27 echoes its login 0x0b)
+	Raw       []byte
 }
 
 // ParseSearch reads the 0x03 element of a SearchRoom reply: [u16 0x45][u16 count][u16 start][u16 total] then 0x45 items, each three u16,
@@ -351,6 +352,7 @@ func ParseSearch(el []byte) []SearchItem {
 			it.ID[i] = binary.BigEndian.Uint16(v[2*i:])
 		}
 		it.Owner = strings.TrimRight(string(v[12:12+16]), "\x00")
+		it.OwnerNpID = v[12 : 12+24]
 		out = append(out, it)
 	}
 	return out

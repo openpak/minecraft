@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.3
+
+- `rtsig` (prds#145, research §42): an iq `error` (the peer refusing one of our sets, vsh code in `<x code=..>`, `Stanza.ErrCode`) is reported
+  through `Participant.OnReject` and never acked or parsed as a fresh offer/accept. On run mc3 the PS3's echoed rejection of our offer was
+  taken as its offer and the probe probed its own address 158 times.
+- `rtsig`: `Participant.SetHostNpID` / `JIDFromNpID` address the console by the JID of its own NpId (`PS3Test`+`ptnpps3` ->
+  `PS3Test@pt.np.np.playstation.net/ps3`) and pin it against np-community's stamped `from` (the console's stream domain `pt.pt`). The
+  PS3 rejected mc3's offer with 0x8002a80e because `pt.pt` maps to `ptptps3` and the connection its Matching2 activated holds `ptnpps3`.
+- Tests replay the console-initiated mc3 exchange and the probe-initiated mc2 one stanza for stanza (`signal_replay_test.go`).
+- `joinps3` takes the host's NpId from the room owner in the SearchRoom reply (`ps3m2.SearchItem.OwnerNpID`, needs np-matching2 >= v0.2.27)
+  before JoinRoom, and logs `REJECTED` with the error code when the PS3 refuses a stanza.
+
 ## 0.3.2
 
 - PS3 presence blob and session data built like a real host's (prds#177): the 56-byte presence blob now equals, byte for byte, the blob the owner's real
