@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"net"
 	"net/netip"
+	"slices"
 	"sync"
 	"time"
 )
@@ -220,6 +221,12 @@ func (j *Joiner) message(from netip.AddrPort, m Message) {
 		switch {
 		case m.Port == 1 && m.Payload[4] == probeRequest: // the host's probe: a type 1 reply echoing its token (capture 12:39:52.018)
 			j.emitTo(from, Message{Flags: 9, Proto: ProtoProbe, Port: 2, Payload: probePayload(j.RVCID, probeReply, binary.BigEndian.Uint64(m.Payload[8:16]))})
+			// The host's probe shows where its PIA socket really is. The public station URL NEX holds can carry the port of the
+			// console's NEX socket instead (real Wii U 2026-11-11: URL port 5224, PIA probes from 5254), so probe the sender too.
+			if !j.traversed && len(j.Targets) > 0 && !slices.Contains(j.Targets, from) {
+				j.Targets = append(j.Targets, from)
+				j.probe(from)
+			}
 		case m.Port == 2 && m.Payload[4] == probeReply && !j.traversed: // traversal done: connect, 6 ms later in the capture
 			j.traversed = true
 			j.Host = from

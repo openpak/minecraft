@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.12
+
+- `joinconsole` (prds#177): the joiner also probes the address the host's own probes come from. The public station URL NEX
+  holds for a console host can carry the port of its NEX socket, not its PIA socket (real Wii U 2026-11-11: URL port 5224, PIA
+  on 5254), so probing only the listed addresses never completed NAT traversal.
+- `joinconsole`: `-nex` defaults to the minecraft-wiiu health listener on 127.0.0.1:22742.
+
 ## 0.2.11
 
 - `minecraft joinconsole` (prds#177): joins a world hosted on a real Wii U as a Wii U joiner on behalf of a player on another
