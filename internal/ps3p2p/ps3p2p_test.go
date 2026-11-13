@@ -269,3 +269,100 @@ func TestSynBackoff(t *testing.T) {
 		out = nil
 	}
 }
+
+// established is a Conn in the data phase whose datagrams are collected (as parsed packets) instead of sent.
+func established(out *[][]byte) *Conn {
+	c := NewConn(1, 0x100, 0xabcd, func(f []byte) { *out = append(*out, f[4:]) }) // aggregator header + port
+	c.state, c.started, c.havePeer, c.expect = stEstab, true, true, 0x7000
+	return c
+}
+
+// A message longer than one segment goes out as segments of at most MSS-0x40 = 1346 bytes, all but the last flagged "more" (the PS3's own
+// 1,350-byte messages arrive as 1,346 + 4 with flags 0x02 and 0x00).
+func TestSendFragments(t *testing.T) {
+	var out [][]byte
+	c := established(&out)
+	msg := make([]byte, 4+MaxPiece)
+	if err := c.Send(msg, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 2 {
+		t.Fatalf("%d datagrams", len(out))
+	}
+	_, f0, _, _, _, off0, _ := parse(out[0])
+	_, f1, _, _, _, off1, _ := parse(out[1])
+	if f0 != flagAck|flagMore || f1 != flagAck || len(out[0])-off0 != 1346 || len(out[1])-off1 != 4 {
+		t.Errorf("flags %#x %#x, sizes %d %d", f0, f1, len(out[0])-off0, len(out[1])-off1)
+	}
+}
+
+// The receive side takes messages from the byte stream: a message cut over segments (and a header cut in two) comes out whole and in order.
+func TestMsgrReassembly(t *testing.T) {
+	var stream []byte
+	var want [][]byte
+	for i, n := range []int{1346, 5, 1346, 0, 300, 1346} {
+		p := bytes.Repeat([]byte{byte(i + 1)}, n)
+		kind := uint16(KindPlain)
+		if i%2 == 1 {
+			kind = KindAcked
+		}
+		stream = append(stream, byte(n>>8), byte(n), 0, byte(kind))
+		stream = append(stream, p...)
+		if n > 0 {
+			want = append(want, p)
+		}
+	}
+	for _, cut := range []int{1346, 1, 3, 7} {
+		var got [][]byte
+		m := &Msgr{C: NewConn(1, 1, 1, func([]byte) {})}
+		m.OnGame = func(k uint16, p []byte) { got = append(got, p) }
+		for s := stream; len(s) > 0; s = s[min(cut, len(s)):] {
+			m.recv(s[:min(cut, len(s))])
+		}
+		if len(got) != len(want) {
+			t.Fatalf("cut %d: %d messages, want %d", cut, len(got), len(want))
+		}
+		for i := range want {
+			if !bytes.Equal(got[i], want[i]) {
+				t.Fatalf("cut %d: message %d differs", cut, i)
+			}
+		}
+	}
+}
+
+// A silent peer is not flooded: the resend interval doubles up to GuessRTOMax, and after GuessDeadAfter without an ack the connection is
+// declared dead once and takes no more data.
+func TestRetransmitBackoffAndDead(t *testing.T) {
+	var out [][]byte
+	c := established(&out)
+	dead := make(chan struct{}, 4)
+	c.OnDead = func() { dead <- struct{}{} }
+	t0 := time.Now()
+	c.Send([]byte("0123456789"), t0)
+	for i := 1; i <= 100*40; i++ { // 40 s in 10 ms steps
+		c.Tick(t0.Add(time.Duration(i) * 10 * time.Millisecond))
+	}
+	// first send, resends at 0.5, 1.5, 3.5, 7.5, 15.5, 23.5 s, dead at 30 s (keepalives are empty acks, the same packet class)
+	data := 0
+	for _, p := range out {
+		if _, _, _, _, _, off, err := parse(p); err == nil && off < len(p) {
+			data++
+		}
+	}
+	if data != 7 {
+		t.Errorf("%d data datagrams in 30 s, want 7", data)
+	}
+	select {
+	case <-dead:
+	case <-time.After(time.Second):
+		t.Fatal("not declared dead")
+	}
+	select {
+	case <-dead:
+		t.Error("declared dead twice")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := c.Send([]byte("x"), t0); err == nil {
+		t.Error("a dead connection took data")
+	}
+}

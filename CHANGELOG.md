@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.1
+
+Why the Wii U got no world data in the first bridged session (2026-11-13 17:31, prds#177), and the fixes.
+
+- **RUDP fragments were dropped.** A PS3 game message is up to 4 + 1,346 bytes but one RUDP segment carries at most 1,346 (MSS - 0x40): librudp
+  sends the first 1,346 with flag 0x02 ("more") and the last 4 bytes in a second segment. `ps3p2p.Msgr` treated every segment as a message, so
+  each 1,350-byte message lost its last 4 bytes (the 4-byte tail was read as an empty ack), the game byte stream was corrupted after the first
+  1,346-byte message (offset 1,646) and the walker waited forever for the rest of a packet that never ended. `Msgr` now reassembles the byte stream
+  and cuts messages from it (`ps3p2p.Split`); `Conn.Send` cuts a longer message into segments with the same flag, as the PS3 does.
+- **PS3 chunks are not Wii U chunks.** The packet is the same (id 0x33, header, sizes 15/255/15, `dimension<<30 | length`) and the column inside
+  is the same run-length column, but the PS3 data is `u32 BE inflated length` + raw deflate where the Wii U's is a zlib stream. `walk.Translate`
+  re-wraps it PS3 -> Wii U (`chunkToWiiU`); all 97 chunks of the session convert and inflate.
+- RUDP retransmission backs off (0.5 s doubling to 8 s, one round for everything in flight) instead of resending the same 16 segments every 0.6 s
+  forever; after 30 s without an ack the connection is declared dead (`Conn.OnDead`) and the bridge session ends. PIA reliable segments to the
+  Wii U back off the same way (300 ms doubling to 4 s).
+- Tests: `internal/bridge/testdata/ps3-world-1113.msgs.bin` is the real message stream the PS3 host sent (rebuilt from the RUDP segments of the
+  trace, 3,135 packets, 97 chunks): `TestWorldStreamWalks` (every packet named, nothing left over, every chunk converts), `TestWorldRelay` (pushed
+  through a session to a fake Wii U message by message: nothing held back beyond one unfinished packet, chunks on channel 2, the rest on channel 1,
+  both channels walk as Wii U streams, pieces within 5,120 bytes); `TestSendFragments`, `TestMsgrReassembly`, `TestRetransmitBackoffAndDead`.
+
 ## 0.4.0
 
 The first cross-play session (prds#177): a Wii U joins a game a real PS3 hosts, through the service as an invisible bridge (docs/wiiu-into-ps3.md).

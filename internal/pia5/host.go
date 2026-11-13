@@ -121,6 +121,7 @@ const (
 	segMax    = 1000 // game bytes per reliable segment (the UDP payload cap is 1204)
 	window    = 48   // unacked segments in flight
 	resendAge = 300 * time.Millisecond
+	resendMax = 4 * time.Second // a segment's resend interval doubles each time it is resent, up to this
 )
 
 type segment struct {
@@ -128,6 +129,7 @@ type segment struct {
 	flags uint16
 	data  []byte
 	sent  time.Time
+	tries uint8 // resends so far: the next one waits resendAge << tries
 }
 
 // stream is one reliable stream (a protocol type and port) with one peer.
@@ -532,9 +534,10 @@ func (h *Host) Tick() {
 		}
 		for _, s := range p.streams {
 			for i := range s.flight {
-				if time.Since(s.flight[i].sent) > resendAge {
-					s.flight[i].sent = time.Now()
-					p.emitSeg(s, s.flight[i])
+				f := &s.flight[i]
+				if time.Since(f.sent) > min(resendAge<<f.tries, resendMax) {
+					f.sent, f.tries = time.Now(), min(f.tries+1, 8)
+					p.emitSeg(s, *f)
 				}
 			}
 		}

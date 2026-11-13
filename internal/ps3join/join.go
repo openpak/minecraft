@@ -632,6 +632,12 @@ func (s *probe) startRudp() {
 			s.endRun("the host's RUDP connection was reset")
 		}
 	}
+	c.OnDead = func() {
+		s.rec.Logf("RUDP", "the peer acknowledged nothing for %s: the connection is dead", ps3p2p.GuessDeadAfter)
+		if s.cfg.NewGame != nil {
+			s.endRun("the host stopped acknowledging our data")
+		}
+	}
 	m := &ps3p2p.Msgr{C: c}
 	m.OnGame = s.onGame
 	m.OnAck = func() { s.rec.Logf("MSG", "rx ack (kind 3), %d kind-2 in flight", m.Inflight()) }

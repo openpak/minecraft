@@ -2,20 +2,30 @@ package walk
 
 import (
 	"bytes"
+	"compress/flate"
+	"compress/zlib"
 	"crypto/sha1"
 	"encoding/binary"
+	"io"
 	"sync"
 )
 
-// Translate rewrites a packet parsed in dialect from for a reader in dialect to. It changes exactly two things:
+// Translate rewrites a packet parsed in dialect from for a reader in dialect to. It changes exactly three things:
 //
 //   - the net version short of E8 and 02 becomes to.NetVersion() (0x0881 <-> 0x0884);
-//   - every PlayerUID (02, 01, 14, D1, E7, CE) is replaced by its counterpart from m, which changes its length 20 <-> 28.
+//   - every PlayerUID (02, 01, 14, D1, E7, CE) is replaced by its counterpart from m, which changes its length 20 <-> 28;
+//   - the compressed column of a chunk packet 0x33 going PS3 -> Wii U is re-wrapped (chunkToWiiU).
 //
 // Every other byte is returned unchanged. PlayerCombat D5 is not touched: both builds read and write event 2 the same way.
 // With from == to, Raw is returned as is.
 func Translate(p Packet, from, to Dialect, m *UIDMap) []byte {
-	if from == to || (p.Version == 0 && len(p.UIDs) == 0) {
+	if from == to {
+		return p.Raw
+	}
+	if p.ID == 0x33 && from == PS3 {
+		return chunkToWiiU(p.Raw)
+	}
+	if p.Version == 0 && len(p.UIDs) == 0 {
 		return p.Raw
 	}
 	out := make([]byte, 0, len(p.Raw)+len(p.UIDs)*8)
@@ -109,4 +119,33 @@ func uniform(b []byte) (byte, bool) {
 		}
 	}
 	return b[0], true
+}
+
+// chunkToWiiU re-wraps the column of a PS3 chunk packet. Both consoles send `33, full flag, int x*16, short 0, int z*16, 15 255 15, int
+// dimension<<30 | data length, data, short 0`, and the data holds the same run-length column (lcechunk.Unpack parses a PS3 one unchanged),
+// but the PS3 data is `u32 BE inflated length, raw deflate` (research ps3-0184-world-data) where the Wii U's is a zlib stream. A packet that
+// does not convert (the Wii U direction, damage) is returned as it is. Translating Wii U -> PS3 is not needed: a console sends no chunks.
+func chunkToWiiU(raw []byte) []byte {
+	const hdr = 19
+	if len(raw) < hdr+4 {
+		return raw
+	}
+	w := binary.BigEndian.Uint32(raw[15:])
+	n := int(w & 0x3fffffff)
+	if n < 4 || hdr+n > len(raw) {
+		return raw
+	}
+	d := raw[hdr : hdr+n]
+	rle, err := io.ReadAll(io.LimitReader(flate.NewReader(bytes.NewReader(d[4:])), 1<<22))
+	if err != nil || len(rle) != int(binary.BigEndian.Uint32(d)) {
+		return raw
+	}
+	var z bytes.Buffer
+	zw := zlib.NewWriter(&z)
+	zw.Write(rle)
+	zw.Close()
+	out := append(make([]byte, 0, hdr+z.Len()+len(raw)-hdr-n), raw[:15]...)
+	out = binary.BigEndian.AppendUint32(out, w&^0x3fffffff|uint32(z.Len()))
+	out = append(out, z.Bytes()...)
+	return append(out, raw[hdr+n:]...)
 }

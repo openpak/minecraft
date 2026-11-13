@@ -25,6 +25,7 @@ const (
 	flagAck  = 0x20
 	flagOpts = 0x10
 	flagTS   = 0x04
+	flagMore = 0x02 // more segments of this message follow
 
 	stSynSent = 2 // as the §26 decode numbers them
 	stSynRcvd = 3
@@ -39,9 +40,10 @@ type Conn struct {
 
 	// Trace, if set, sees every packet in both directions with a one-line description (dir is "rx" or "tx").
 	Trace         func(dir, desc string, pkt []byte)
-	OnPayload     func([]byte) // one in-order data payload (one message)
+	OnPayload     func([]byte) // one in-order data segment (a piece of the byte stream, see above)
 	OnEstablished func()
 	OnReset       func()
+	OnDead        func() // data went unacknowledged for GuessDeadAfter: the peer is gone (called once, no more data is sent)
 
 	mu       sync.Mutex
 	state    int
@@ -56,7 +58,10 @@ type Conn struct {
 	rto      time.Duration // SYN / SYN+ACK retransmit timer, doubling
 	havePeer bool
 	unacked  []seg
-	queue    [][]byte
+	queue    []seg
+	dataRTO  time.Duration // current data retransmission timeout: GuessRTO, doubling per unanswered round, back to GuessRTO on progress
+	progress time.Time     // last time the peer acked new data (or the oldest unacked segment was sent)
+	dead     bool
 	lastSyn  time.Time
 	lastTx   time.Time
 	started  bool
@@ -65,12 +70,13 @@ type Conn struct {
 type seg struct {
 	seq     uint16
 	payload []byte
+	more    bool
 	sent    time.Time
 }
 
 // NewConn prepares a context; nothing is sent until Start.
 func NewConn(port uint16, isn uint16, connID uint32, out func([]byte)) *Conn {
-	return &Conn{Port: port, Out: out, isn: isn, connID: connID, state: stSynSent, nextSeq: isn + 1, cap: CapWord, rto: SynRetryFirst}
+	return &Conn{Port: port, Out: out, isn: isn, connID: connID, state: stSynSent, nextSeq: isn + 1, cap: CapWord, rto: SynRetryFirst, dataRTO: GuessRTO}
 }
 
 func (c *Conn) frame(pkt []byte) []byte {
@@ -116,7 +122,11 @@ func (c *Conn) emptyAck() []byte {
 }
 
 func (c *Conn) dataPkt(s seg) []byte {
-	p := []byte{flagAck, WindowByte, byte(s.seq >> 8), byte(s.seq), byte(c.expect >> 8), byte(c.expect)}
+	f := byte(flagAck)
+	if s.more {
+		f |= flagMore
+	}
+	p := []byte{f, WindowByte, byte(s.seq >> 8), byte(s.seq), byte(c.expect >> 8), byte(c.expect)}
 	return append(p, s.payload...)
 }
 
@@ -143,23 +153,36 @@ func (c *Conn) PeerMSS() uint16 {
 	return c.peerMSS
 }
 
-// Send queues one payload (one message); it goes out as the window allows. It never blocks.
+// Send queues one message; it is cut into segments of at most MSS-0x40 bytes (all but the last flagged "more") and goes out as the window
+// allows. It never blocks.
 func (c *Conn) Send(payload []byte, now time.Time) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.state != stEstab {
-		return fmt.Errorf("ps3p2p: rudp not established")
+	if c.state != stEstab || c.dead {
+		return fmt.Errorf("ps3p2p: rudp not established or dead")
 	}
-	c.queue = append(c.queue, append([]byte(nil), payload...))
+	max := int(MSS) - 0x40
+	if m := int(c.peerMSS); m >= 0x80 && m < int(MSS) { // the peer's MSS, clamped as librudp does
+		max = m - 0x40
+	}
+	for first := true; len(payload) > 0 || first; first = false {
+		n := min(len(payload), max)
+		c.queue = append(c.queue, seg{payload: append([]byte(nil), payload[:n]...), more: n < len(payload)})
+		payload = payload[n:]
+	}
 	c.pump(now)
 	return nil
 }
 
 func (c *Conn) pump(now time.Time) {
 	for len(c.queue) > 0 && len(c.unacked) < GuessSendWindow {
-		s := seg{seq: c.nextSeq, payload: c.queue[0], sent: now}
+		s := c.queue[0]
 		c.queue = c.queue[1:]
+		s.seq, s.sent = c.nextSeq, now
 		c.nextSeq++
+		if len(c.unacked) == 0 {
+			c.progress = now
+		}
 		c.unacked = append(c.unacked, s)
 		c.tx(c.dataPkt(s), now)
 	}
@@ -187,7 +210,20 @@ func (c *Conn) Tick(now time.Time) {
 			}
 		}
 	case stEstab:
-		if len(c.unacked) > 0 && now.Sub(c.unacked[0].sent) >= GuessRTO {
+		if c.dead {
+			return
+		}
+		if len(c.unacked) > 0 && now.Sub(c.progress) >= GuessDeadAfter {
+			c.dead, c.queue, c.unacked = true, nil, nil
+			if c.OnDead != nil {
+				go c.OnDead()
+			}
+			return
+		}
+		if len(c.unacked) > 0 && now.Sub(c.unacked[0].sent) >= c.dataRTO {
+			// go-back-N resend of what is in flight, then wait twice as long (librudp-style backoff, capped): an unanswered peer is
+			// not flooded, and a stalled one is declared dead after GuessDeadAfter
+			c.dataRTO = min(2*c.dataRTO, GuessRTOMax)
 			for i := range c.unacked {
 				c.unacked[i].sent = now
 				c.tx(c.dataPkt(c.unacked[i]), now)
@@ -384,6 +420,7 @@ func (c *Conn) packet(p []byte, now time.Time) (deliver [][]byte, estab, reset b
 			}
 			for len(c.unacked) > 0 && after(ack, c.unacked[0].seq) {
 				c.unacked = c.unacked[1:]
+				c.dataRTO, c.progress = GuessRTO, now
 			}
 			c.pump(now)
 		}

@@ -52,6 +52,16 @@ the PS3 it is the joining player, under that player's own PS3 identity (every Op
 
 The service log has one line per state change (`bridge session game=... joiner_pid=... state=... detail=...`).
 
+## 4a. The PS3 world stream (2026-11-13 17:31, first bridged session)
+
+Seen on a real PS3 host (01.84) and now handled: a game message is `u16 len, u16 kind` + `len` bytes with `len` up to 1,346, so up to 1,350 bytes in
+all, and one RUDP segment carries at most 1,346: the message arrives as two segments (the first flagged 0x02 "more", the second 4 bytes), and the
+receiver reassembles the byte stream. The PS3 chunk (0x33) holds `u32 BE inflated length` + raw deflate; the Wii U's holds a zlib stream; both
+inflate to the same run-length column, so the bridge re-wraps the data (`walk.chunkToWiiU`). Everything else the host sent in that session (3,135
+packets, 32 distinct ids) walks and passes through unchanged apart from the net version and PlayerUIDs. Tile modes 9 and 15 occur in PS3 columns
+that `lcechunk` (written from Wii U captures) does not read; the bridge does not parse columns. Compressed block-entity NBT (0x84, ContainerSetContent
+items with NBT) did not occur in the stream: whether it needs the same re-wrapping is open.
+
 ## 5. Guessed
 
 The login template tail the Wii U sends (skin and cape ids, flags) is accepted by a PS3 host; the PS3 login response and D6 translate to

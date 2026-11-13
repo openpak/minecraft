@@ -34,6 +34,11 @@ const (
 	// GuessRTO is the data retransmission timeout (go-back-N: everything unacked is resent).
 	GuessRTO = 500 * time.Millisecond
 
+	// GuessRTOMax caps the doubling of the retransmission timeout while the peer acks nothing, and GuessDeadAfter is how long data may go
+	// unacknowledged before the connection is declared dead (librudp's own connect timeout is 30 s, seen: RESET reason 3).
+	GuessRTOMax    = 8 * time.Second
+	GuessDeadAfter = 30 * time.Second
+
 	// GuessKeepalive is the idle interval after which we send an empty ack so the PS3's idle timer does not expire. Its real idle
 	// timeout is unknown; a few seconds is safe either way.
 	GuessKeepalive = 2 * time.Second

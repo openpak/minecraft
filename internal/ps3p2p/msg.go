@@ -10,7 +10,9 @@ import (
 // The game's message layer on RUDP (spec §2.3): one RUDP message is `u16 len, u16 kind, payload[len]`, big-endian. Kind 1 is game bytes
 // queued with the SendData flag clear and the 32-byte hello, kind 2 game bytes with the flag set (the receiver answers each with an empty
 // kind-3 message `00 00 00 03`), the send queue cuts the game stream into pieces of at most MaxPiece bytes. A readable message of exactly
-// 4 bytes is an ack whatever its kind.
+// 4 bytes is an ack whatever its kind. A message of 0x542 bytes plus its 4-byte header is longer than one RUDP segment (1,346), so RUDP
+// delivers it in two or more segments (the second a bare 4-byte tail, seen on hardware): the receive side parses messages from the
+// reassembled byte stream, never one message per segment.
 const (
 	KindPlain = 1
 	KindAcked = 2
@@ -28,7 +30,8 @@ type Msgr struct {
 	Trace func(dir string, kind uint16, payload []byte, note string)
 
 	mu       sync.Mutex
-	inflight int // kind-2 messages sent and not yet acked (conn+0xb8 in the game)
+	inflight int    // kind-2 messages sent and not yet acked (conn+0xb8 in the game)
+	pend     []byte // received stream bytes not yet a whole message
 }
 
 // Attach wires the Conn's payload callback to this layer.
@@ -76,21 +79,46 @@ func (m *Msgr) WriteGame(data []byte, counted bool, now time.Time) error {
 	return nil
 }
 
+// Rx is one received message.
+type Rx struct {
+	Kind uint16
+	P    []byte
+}
+
+// Split cuts a received byte stream into whole messages; rest is the unfinished tail (more segments to come). A message that claims more
+// than MaxPiece bytes cannot be a boundary, and err says so (no sender cuts longer).
+func Split(stream []byte) (msgs []Rx, rest []byte, err error) {
+	for len(stream) >= 4 {
+		n, kind := int(binary.BigEndian.Uint16(stream)), binary.BigEndian.Uint16(stream[2:])
+		if n > MaxPiece {
+			return msgs, stream, fmt.Errorf("ps3p2p: message of kind %d says %d bytes (max %d)", kind, n, MaxPiece)
+		}
+		if 4+n > len(stream) {
+			break
+		}
+		msgs = append(msgs, Rx{kind, stream[4 : 4+n]})
+		stream = stream[4+n:]
+	}
+	return msgs, stream, nil
+}
+
 func (m *Msgr) recv(b []byte) {
-	for len(b) > 0 {
-		if len(b) < 4 {
-			m.note("rx", 0, b, fmt.Sprintf("%d stray bytes after the last message", len(b)))
-			return
-		}
-		n, kind := int(binary.BigEndian.Uint16(b)), binary.BigEndian.Uint16(b[2:])
-		if 4+n > len(b) {
-			m.note("rx", kind, b[4:], fmt.Sprintf("message says %d bytes, %d present: kept as received", n, len(b)-4))
-			n = len(b) - 4
-		}
-		p := b[4 : 4+n]
-		b = b[4+n:]
-		m.note("rx", kind, p, "")
-		if n == 0 {
+	m.mu.Lock()
+	msgs, rest, err := Split(append(m.pend, b...))
+	for i := range msgs {
+		msgs[i].P = append([]byte(nil), msgs[i].P...)
+	}
+	m.pend = append([]byte(nil), rest...)
+	if err != nil { // the stream is lost: start over at the next segment
+		m.pend = nil
+	}
+	m.mu.Unlock()
+	if err != nil {
+		m.note("rx", 0, b, err.Error()+": stream dropped")
+	}
+	for _, g := range msgs {
+		m.note("rx", g.Kind, g.P, "")
+		if len(g.P) == 0 {
 			m.mu.Lock()
 			if m.inflight > 0 {
 				m.inflight--
@@ -101,11 +129,11 @@ func (m *Msgr) recv(b []byte) {
 			}
 			continue
 		}
-		if kind == KindAcked {
+		if g.Kind == KindAcked {
 			m.Write(KindAck, nil, time.Now()) // not counted: a kind-3 write is an ack
 		}
 		if m.OnGame != nil {
-			m.OnGame(kind, append([]byte(nil), p...))
+			m.OnGame(g.Kind, g.P)
 		}
 	}
 }
