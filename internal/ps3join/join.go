@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openpak/minecraft/internal/lce/walk"
+	"github.com/openpak/minecraft/internal/lce"
 	"github.com/openpak/minecraft/internal/ps3m2"
 	"github.com/openpak/minecraft/internal/ps3p2p"
 	"github.com/openpak/minecraft/internal/rtsig"
@@ -45,11 +45,13 @@ type Config struct {
 	WaitOffer         time.Duration // let the host offer first; then we offer
 	Hold              time.Duration
 	Pad               int
-	PreLogin          bool // send E8 after the hello, as a PS3 joiner does
+	PreLogin          bool // run the login (E8 PreLogin, 01 Login, keep-alive, position: Game) after the hello, as a PS3 joiner does
 
-	// Nudge59 (experiment, 0 = off): this long after signalling is established, if the host has still not written our table entry, set our
-	// 0x59 to 0 and then back to our mask with SetRoomMemberDataInternal (0x3206). np-matching2 pushes each change to the host as 0x320d;
-	// the host's 0x1107 handler (EB 0xc96ea0) adds the new pads exactly as its 0x3207 path would: AddPlayer, 0x3204, RUDP Initiate.
+	// Nudge59 is a WORKAROUND (0 = off; the joinps3 flag defaults to 10 s): this long after signalling is established, if the host has still
+	// not written our table entry, set our 0x59 to 0 and then back to our mask with SetRoomMemberDataInternal (0x3206). np-matching2 pushes
+	// each change to the host as 0x320d; the host's 0x1107 handler (EB 0xc96ea0) adds the new pads exactly as its 0x3207 path would: AddPlayer,
+	// 0x3204, RUDP Initiate. Why the host does not do that on its 0x3207 reply (EB 0xc96560 event 0x10c, the path a real joiner takes) is not
+	// known (mc4: nothing; mc5: only with this).
 	Nudge59 time.Duration
 }
 
@@ -59,6 +61,8 @@ var nudgeStep = 3 * time.Second
 // Progress is how far a run got.
 type Progress struct {
 	Signalling, Established, RudpConnected, TableEntry, HelloSent, FirstGame bool
+	// Game is what the host's game stream showed (set when the run ends): pre-login reply, login response, in world, packets, chunks, position.
+	Game lce.ClientStats
 }
 
 func (p Progress) String() string {
@@ -87,8 +91,7 @@ type probe struct {
 	roomKey   []byte
 	small     byte
 	uid       [28]byte
-	stream    []byte
-	walkLost  bool
+	gl        *Game // the game layer, made when the hello leaves
 	wantRudp  string
 	rudpFrom  string
 	helloDone bool
@@ -119,7 +122,9 @@ func Run(ctx context.Context, cfg Config) (Progress, error) {
 	s.mu.Lock()
 	prog := s.prog
 	s.mu.Unlock()
+	prog.Game = s.gameStats()
 	rec.Logf("SUMMARY", "%s", prog)
+	rec.Logf("SUMMARY", "game: %s", StatsString(prog.Game, s.gameLost()))
 	if err != nil {
 		rec.Logf("SUMMARY", "stopped: %v", err)
 	}
@@ -211,23 +216,69 @@ func (s *probe) run(ctx context.Context) error {
 	s.m2 = m2
 	s.mu.Unlock()
 	defer func() { // leave the room so the next run joins fresh (the host raises MemberJoined only for a new member)
+		s.stopGame() // the keep-alive loop first: nothing is sent to a host whose room member is gone
 		m2.Leave()
 		time.Sleep(500 * time.Millisecond)
 	}()
 	evErr := make(chan error, 1)
 	go func() { evErr <- m2.Events(func(f *ps3m2.Frame) { s.onFrame(f) }) }()
 
+	// Hold: stay in the world until Hold is over (keep-alive and position are the game layer's), say how it goes every 30 s, and leave early
+	// only when the host drops us (FF Disconnect) or a connection to a service is gone.
 	hold := time.After(cfg.Hold)
-	select {
-	case <-ctx.Done():
+	report, gone := time.NewTicker(30*time.Second), time.NewTicker(time.Second)
+	defer report.Stop()
+	defer gone.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-hold:
+			rec.Logf("DONE", "hold of %s over", cfg.Hold)
+			return nil
+		case err := <-rtErr:
+			return fmt.Errorf("RT stream: %w", err)
+		case err := <-evErr:
+			return fmt.Errorf("matching2 connection: %w", err)
+		case <-report.C:
+			if st := s.gameStats(); st != (lce.ClientStats{}) {
+				rec.Logf("GAME", "%s", StatsString(st, s.gameLost()))
+			}
+		case <-gone.C:
+			if st := s.gameStats(); st.Disconnect != "" {
+				rec.Logf("DONE", "the host dropped us: FF Disconnect reason %s (%s)", st.Disconnect, StatsString(st, s.gameLost()))
+				return nil
+			}
+		}
+	}
+}
+
+func (s *probe) gameStats() lce.ClientStats {
+	s.mu.Lock()
+	g := s.gl
+	s.mu.Unlock()
+	if g == nil {
+		return lce.ClientStats{}
+	}
+	return g.Stats()
+}
+
+func (s *probe) gameLost() error {
+	s.mu.Lock()
+	g := s.gl
+	s.mu.Unlock()
+	if g == nil {
 		return nil
-	case <-hold:
-		rec.Logf("DONE", "hold of %s over", cfg.Hold)
-		return nil
-	case err := <-rtErr:
-		return fmt.Errorf("RT stream: %w", err)
-	case err := <-evErr:
-		return fmt.Errorf("matching2 connection: %w", err)
+	}
+	return g.Lost()
+}
+
+func (s *probe) stopGame() {
+	s.mu.Lock()
+	g := s.gl
+	s.mu.Unlock()
+	if g != nil {
+		g.Stop()
 	}
 }
 
@@ -568,6 +619,10 @@ func (s *probe) maybeHello() {
 	}
 	s.helloDone = true
 	small, uid, m := s.small, s.uid, s.msgr
+	// the game layer exists before the hello leaves: the host's first message can come right behind it
+	s.gl = &Game{Name: s.cfg.OnlineID, UID: uid, Logf: s.rec.Logf,
+		Write: func(b []byte) { m.WriteGame(b, ps3p2p.GuessKind2Counted, time.Now()) }}
+	g := s.gl
 	s.mu.Unlock()
 	h := Hello(small, uid)
 	s.rec.Logf("HELLO", "sending the 32-byte hello (small id %d): %x", small, h)
@@ -577,38 +632,22 @@ func (s *probe) maybeHello() {
 	}
 	s.progress(func(p *Progress) { p.HelloSent = true }, "hello sent")
 	if s.cfg.PreLogin {
-		// E8 ServerboundPreLogin: net version 0x0884, then the name as a short length and UTF-16BE (internal/lce Client.PreLogin's form)
-		name := s.cfg.OnlineID
-		b := []byte{0xE8, 0x08, 0x84, byte(len(name) >> 8), byte(len(name))}
-		for _, r := range name {
-			b = append(b, byte(r>>8), byte(r))
-		}
-		s.rec.Logf("HELLO", "sending E8 PreLogin: %x", b)
-		m.WriteGame(b, ps3p2p.GuessKind2Counted, time.Now())
+		// E8 PreLogin goes out at once (lce.Client.Start); the 01 Login follows the host's 02, then keep-alive and position once it is in the world
+		s.rec.Logf("HELLO", "starting the login: E8 PreLogin as %q, then 01 Login after the host's 02", s.cfg.OnlineID)
+		g.Start()
 	}
 }
 
-// onGame records a kind 1 or 2 message of the host and runs the game-stream walker over it (trivial: ids and a sync check).
+// onGame records a kind 1 or 2 message of the host (the raw bytes to <label>.rx.bin) and hands it to the game layer, which walks, names and
+// answers it. Nothing here stops on an unknown packet.
 func (s *probe) onGame(kind uint16, p []byte) {
 	s.progress(func(pr *Progress) { pr.FirstGame = pr.FirstGame || pr.HelloSent }, "game packet after our hello")
 	s.rec.Game("rx", p)
 	s.mu.Lock()
-	if s.walkLost {
-		s.mu.Unlock()
-		return
-	}
-	s.stream = append(s.stream, p...)
-	pkts, rest, err := walk.Walk(s.stream, walk.PS3)
-	s.stream = append([]byte(nil), rest...)
-	if err != nil {
-		s.walkLost = true
-	}
+	g := s.gl
 	s.mu.Unlock()
-	for _, k := range pkts {
-		s.rec.Logf("WALK", "PS3 packet id %#02x, %d bytes", k.ID, len(k.Raw))
-	}
-	if err != nil {
-		s.rec.Logf("WALK", "walker lost sync (%v); the raw stream is in %s.rx.bin", err, s.cfg.Label)
+	if g != nil {
+		g.OnGame(p)
 	}
 }
 

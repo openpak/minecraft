@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.7
+
+- `joinps3` completes the PS3 login (prds#177; run mc5 2026-11-13 was the first game data from a real PS3 host). What mc5's 219 host bytes are, walked
+  with `internal/lce/walk` (names now in `walk.Name`, the 129 ids of the 01.84 table plus A2): one kind-1 message of 74 bytes = `00` KeepAlive (int 0) +
+  `02` ClientboundPreLogin (net version 0x0884, login key "-", one PlayerUID, the host's); then `00` KeepAlive (5 bytes, kind 1) once a second for
+  28 s; then `FF` Disconnect reason 3. The "4-byte prefix" before the 02 is the KeepAlive's int, not framing. The host's pre-login handler (EB
+  0xbc1760) answered our E8 at once, then its pending connection waited for the `01` Login for 600 ticks (EB 0xbc01b4, 30.2 s measured) and
+  dropped us with reason 3, because we never sent it.
+- New `ps3join.Game`: the PS3 joiner's game layer, reusable by the bridge like `pia5.Joiner` + `lce.Client` on the Wii U leg. `OnGame(bytes)` takes
+  the host's kind 1/2 payloads (pieces may cut a packet anywhere), `Write` hands ours out, `OnPacket` sees every packet both ways. It reuses
+  `lce.Client` (new `NoSession` option: no FE hello, no channel-3 tick, E8 at once) through the walker: host packets are translated PS3 -> Wii U
+  (version, 28 -> 20-byte PlayerUIDs; chunks 0x33 go to the client's chunk channel), the client's packets Wii U -> PS3. PS3 specifics on the `01`: our
+  28-byte PlayerUID in both id fields and the host's friends-only byte + UGC players version echoed from its `02` (the host compares that int with
+  its own and answers a mismatch with the 02 again, EB 0xbc1a24). In the world it is the Wii U joiner's behaviour: `87` + `0D` after D6, `E2` +
+  `0B` once a second.
+- `joinps3` records the game stream by name (`WALK rx/tx 0x.. <name>`), never stops on an unknown packet (the walker stops walking, the session and
+  the raw `.rx.bin` go on), reports packets/chunks/position every 30 s and in a second SUMMARY line, holds until `-hold`, ends early only on the
+  host's FF, then stops sending and leaves the room.
+- `-nudge59` is now on by default (10 s; `-nudge59 0` turns it off). It is a workaround: only mc5's nudge made the host add us, and why it does not
+  on its own 0x3207 reply (the path a real joiner takes) is still unknown.
+- Tests: `TestGameLoginAfterMc5` replays mc5's host bytes (whole and cut at three places) and asserts our E8 and the next message, the `01`, byte
+  level; `TestGameEchoesUGCPair`, `TestGameInWorld` (01 response + D6 -> 87 + 0D, in the PS3 dialect), `TestGameUnknownPacketDoesNotAbort`.
+
 ## 0.3.6
 
 - `ps3p2p` takes the RUDP values a real PS3 showed (prds#177, #145; run live10 2026-11-13, a Terraria host's SYN and RESET, decoded against

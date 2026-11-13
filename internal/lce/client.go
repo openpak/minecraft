@@ -24,6 +24,9 @@ type Client struct {
 	PID     uint32
 	HostPID uint32
 	Log     *slog.Logger
+	// NoSession is the PS3 leg: its transport has no FE/FF session hello and no channel-3 tick, so Start sends the E8 pre-login at once
+	// (the PS3 joiner's 32-byte hello is the transport's) and the tick loop only sends the keep-alive and position.
+	NoSession bool
 
 	mu        sync.Mutex
 	stats     ClientStats
@@ -95,7 +98,11 @@ func (c *Client) packets(b ...[]byte) {
 // Start sends the hello and runs the tick loop until Stop.
 func (c *Client) Start() {
 	c.done = make(chan struct{})
-	c.Send(c.Hello())
+	if c.NoSession {
+		c.packets(c.PreLogin())
+	} else {
+		c.Send(c.Hello())
+	}
 	go func() {
 		tick := time.NewTicker(50 * time.Millisecond)
 		defer tick.Stop()
@@ -105,7 +112,9 @@ func (c *Client) Start() {
 				return
 			case <-tick.C:
 			}
-			c.Send([]byte{0, chTick})
+			if !c.NoSession {
+				c.Send([]byte{0, chTick})
+			}
 			if n%20 != 0 {
 				continue
 			}

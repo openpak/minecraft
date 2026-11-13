@@ -21,6 +21,14 @@ func TestCoverage(t *testing.T) {
 	if len(layouts) != 130 {
 		t.Fatalf("%d layouts, want 130", len(layouts))
 	}
+	for id := range layouts {
+		if Name(id) == "unknown" {
+			t.Errorf("id %#02x has a layout but no name", id)
+		}
+	}
+	if Name(0x02) != "ClientboundPreLogin" || Name(0xE8) != "ServerboundPreLogin" || Name(0xFF) != "Disconnect" {
+		t.Error("names")
+	}
 }
 
 // E8 from the 11-07 capture's joiner: version 0x0881, name "tobagin" (UTF-16).
