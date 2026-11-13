@@ -69,8 +69,14 @@ func serve() error {
 	} else {
 		slog.Warn("MINECRAFT_CORE_ADDRESS unset: players are not published to the account core")
 	}
+	dir, wiiu := startDirectory(ctx, pres)
 	rl := &relay.Relay{Presence: pres, Conn: conn, Public: public, Store: st, JavaAddr: env("MINECRAFT_JAVA_ADDR", fmt.Sprintf("127.0.0.1:%d", javaPort)),
 		HostName: env("MINECRAFT_HOST_NAME", "OpenPak"), ViewDistance: view}
+	if dir != nil && os.Getenv("MINECRAFT_BRIDGE_OFF") != "1" {
+		if m := newBridge(public, dir, wiiu); m != nil { // not rl.Bridge = newBridge(...): a nil *Manager in the interface is not nil
+			rl.Bridge = m
+		}
+	}
 	go func() {
 		if err := rl.Serve(ctx); err != nil && ctx.Err() == nil {
 			slog.Error("relay stopped", "err", err)
@@ -126,7 +132,7 @@ func serve() error {
 		}
 		w.Write([]byte("ok\n"))
 	}))
-	if dir := startDirectory(ctx, pres); dir != nil {
+	if dir != nil {
 		mux.HandleFunc("GET /internal/directory", authed(func(w http.ResponseWriter, _ *http.Request) {
 			json.NewEncoder(w).Encode(map[string]any{"games": dir.Games(), "joins": dir.RecentJoins()})
 		}))
@@ -151,11 +157,11 @@ func serve() error {
 // player hosts on one console shows on the other's network under the host's name. MINECRAFT_NEX_URL and MINECRAFT_INTERNAL_KEY reach nex
 // minecraft-wiiu; MINECRAFT_PS3_MATCHING_URL, MINECRAFT_PS3_COMMUNITY_URL and MINECRAFT_PS3_KEY reach np-matching2 and np-community
 // (their NP_BRIDGE_KEY). Without them nothing runs, as before.
-func startDirectory(ctx context.Context, pres *presence.Reporter) *directory.Directory {
+func startDirectory(ctx context.Context, pres *presence.Reporter) (*directory.Directory, *directory.WiiU) {
 	nexURL, matching, community := os.Getenv("MINECRAFT_NEX_URL"), os.Getenv("MINECRAFT_PS3_MATCHING_URL"), os.Getenv("MINECRAFT_PS3_COMMUNITY_URL")
 	if nexURL == "" || matching == "" || community == "" {
 		slog.Warn("session directory off: set MINECRAFT_NEX_URL, MINECRAFT_PS3_MATCHING_URL and MINECRAFT_PS3_COMMUNITY_URL")
-		return nil
+		return nil, nil
 	}
 	wiiu := &directory.WiiU{Nex: nexURL, NexKey: os.Getenv("MINECRAFT_INTERNAL_KEY"), ResolveURL: env("MINECRAFT_RESOLVE_URL", "http://openpak-nn-account:20050"),
 		ResolveKey: os.Getenv("MINECRAFT_RESOLVE_KEY")}
@@ -166,7 +172,7 @@ func startDirectory(ctx context.Context, pres *presence.Reporter) *directory.Dir
 	d := &directory.Directory{Adapters: []directory.Adapter{wiiu, ps3}}
 	go d.Run(ctx, 5*time.Second)
 	slog.Info("session directory on", "platforms", "wiiu,ps3")
-	return d
+	return d, wiiu
 }
 
 func healthcheck() error {

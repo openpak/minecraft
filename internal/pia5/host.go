@@ -193,6 +193,13 @@ func NewHost(c *Cipher, self netip.AddrPort, pid uint32, out Out) *Host {
 	return h
 }
 
+// SetRVCID changes the connection id the host announces, before any peer exists: the station URL of a bridged game names its own (nex
+// bridged.go bridgedRVCID), and only a probe reply carrying that id completes the joiner's NAT traversal.
+func (h *Host) SetRVCID(v uint32) {
+	h.RVCID = v
+	binary.BigEndian.PutUint16(h.nonce[:], uint16(v))
+}
+
 func (h *Host) ms() uint64 { return uint64(time.Since(h.start).Milliseconds()) }
 
 func (h *Host) pub() Loc {

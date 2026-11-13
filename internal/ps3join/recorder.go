@@ -20,6 +20,7 @@ type Recorder struct {
 	rx, tx   *os.File
 	start    time.Time
 	Prefix   string
+	Quiet    bool // service use: nothing goes to stdout (the service logs state changes itself)
 	skeyMask *regexp.Regexp
 }
 
@@ -56,6 +57,9 @@ func (r *Recorder) Logf(tag, format string, a ...any) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	fmt.Fprintln(r.log, line)
+	if r.Quiet {
+		return
+	}
 	if len(line) > 200 {
 		line = line[:200] + fmt.Sprintf("... (%d chars, full line in the log file)", len(line))
 	}

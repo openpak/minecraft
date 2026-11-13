@@ -25,6 +25,22 @@ type LegSpec struct {
 	HostPID    uint32 `json:"host_pid"`
 	JoinerPID  uint32 `json:"joiner_pid"`
 	SessionKey string `json:"session_key"` // hex, never logged or stored
+	// Game is the directory id of a game a player hosts on another console ("ps3:<room>"): the leg is a bridged one, the joiner's PIA
+	// session is relayed to that game's host instead of the Java world (prds#177). JoinerPID is the Wii U joining it.
+	Game string `json:"game,omitempty"`
+}
+
+// BridgedRVCID is the connection id of a bridged host's station URL (nex bridged.go bridgedRVCID): not the world's, so a probe request for
+// it is told apart, and no live NEX connection has it.
+const BridgedRVCID = 0xFFF2
+
+// Bridge is the bridge to a game hosted on another console (internal/bridge). Prepare is nex's push at JoinMatchmakeSession: start the far
+// leg now, the console's PIA session follows seconds later. Attach hands over the console's PIA peer once its first game message arrives
+// (its PID is known by then): send puts one reliable message to the console, drop closes the peer. It returns the handler of the console's
+// messages.
+type Bridge interface {
+	Prepare(game string, hostPID, joinerPID uint32) error
+	Attach(game string, hostPID, joinerPID uint32, send func([]byte), drop func()) (func([]byte), error)
 }
 
 type leg struct {
@@ -43,6 +59,7 @@ type Relay struct {
 	Conn         net.PacketConn
 	Public       netip.AddrPort
 	Store        *store.Store
+	Bridge       Bridge // nil: no bridged legs
 	JavaAddr     string
 	HostName     string
 	ViewDistance int
@@ -67,11 +84,14 @@ func (r *Relay) Register(ctx context.Context, s LegSpec) (int64, error) {
 		return 0, err
 	}
 	// nex re-registers the world's leg every minute: the same gathering and key keeps the live leg (and its players)
+	if s.Game != "" && (r.Bridge == nil || s.JoinerPID == 0) {
+		return 0, fmt.Errorf("bridged leg %s: no bridge configured or no joiner_pid", s.Game)
+	}
 	r.mu.Lock()
 	for _, l := range r.legs {
 		if l.spec.Gathering == s.Gathering && l.spec.HostPID == s.HostPID && string(l.key) == string(key) {
 			r.mu.Unlock()
-			return l.id, nil
+			return l.id, r.prepare(s)
 		}
 	}
 	r.mu.Unlock()
@@ -96,12 +116,27 @@ func (r *Relay) Register(ctx context.Context, s LegSpec) (int64, error) {
 		r.Conn.WriteTo(c.Seal(h, n, msgs), net.UDPAddrFromAddrPort(to))
 	})
 	l.host.NewPeer = func(p *pia5.Peer) { r.newPeer(l, p) }
+	if s.Game != "" {
+		l.host.SetRVCID(BridgedRVCID)
+	}
 	r.legs[id] = l
-	slog.Info("leg registered", "leg", id, "gathering", s.Gathering, "host_pid", s.HostPID)
-	return id, nil
+	slog.Info("leg registered", "leg", id, "gathering", s.Gathering, "host_pid", s.HostPID, "game", s.Game)
+	return id, r.prepare(s)
+}
+
+// prepare starts the far leg of a bridged join (a no-op for the world's leg). It runs outside r.mu.
+func (r *Relay) prepare(s LegSpec) error {
+	if s.Game == "" {
+		return nil
+	}
+	return r.Bridge.Prepare(s.Game, s.HostPID, s.JoinerPID)
 }
 
 func (r *Relay) newPeer(l *leg, p *pia5.Peer) {
+	if l.spec.Game != "" {
+		r.bridgePeer(l, p)
+		return
+	}
 	var sid int64
 	cfg := lce.Config{JavaAddr: r.JavaAddr, HostName: r.HostName, HostID: l.hostID, ViewDistance: r.ViewDistance, Log: slog.Default().With("leg", l.id)}
 	var leave func()

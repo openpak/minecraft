@@ -11,6 +11,7 @@ console captures (`docs/provenance.md`). Card openpak/prds#162; PS3/360 adapters
 - `internal/lce`: the game layer: hello, pre-login, login, world sync, chunk stream, position.
 - `internal/javamc`: a Java Edition 1.8.9 client (login, compression, chunks, keep alive, position).
 - `internal/javaserver`: runs the official server jar (fetched on first start, never shipped).
+- `internal/bridge`: a Wii U player in a game a real PS3 hosts (`docs/wiiu-into-ps3.md`, prds#177); `internal/directory` advertises player-hosted games on every console.
 - Wii U only; PS3 and 360 plug in beside `internal/lce` once their captures exist.
 - Not yet: other players and mobs, chat, console block-change packets (columns are re-sent), the stock friend-list listing.
 

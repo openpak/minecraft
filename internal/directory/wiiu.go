@@ -133,6 +133,11 @@ func (w *WiiU) resolvePID(ctx context.Context, pid uint32) (string, error) {
 	return out.Account, nil
 }
 
+// ResolvePID is the OpenPak account behind a Wii U PID.
+func (w *WiiU) ResolvePID(ctx context.Context, pid uint32) (string, error) {
+	return w.resolvePID(ctx, pid)
+}
+
 func (w *WiiU) resolveAccount(ctx context.Context, account string) (uint32, error) {
 	w.mu.Lock()
 	p, ok := w.pids[account]

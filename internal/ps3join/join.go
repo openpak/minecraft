@@ -45,7 +45,16 @@ type Config struct {
 	WaitOffer         time.Duration // let the host offer first; then we offer
 	Hold              time.Duration
 	Pad               int
-	PreLogin          bool // run the login (E8 PreLogin, 01 Login, keep-alive, position: Game) after the hello, as a PS3 joiner does
+	// Service use (internal/bridge): Conn is a UDP socket the caller opened (Port is its port; nil: listen on Port), Rec a recorder the caller
+	// owns (Run does not close it), NewGame replaces the joiner's own game layer (the bridge relays a console's stream instead of playing),
+	// OnProgress hears every state change.
+	Ticket, Pass []byte // the NP ticket and the title passphrase as bytes, instead of TicketFile and TitlesFile
+	Conn         *net.UDPConn
+	Rec          *Recorder
+	NewGame      func(GameEnv) GameLayer
+	OnProgress   func(what string, p Progress)
+
+	PreLogin bool // run the login (E8 PreLogin, 01 Login, keep-alive, position: Game) after the hello, as a PS3 joiner does
 
 	// Nudge59 is a WORKAROUND (0 = off; the joinps3 flag defaults to 10 s): this long after signalling is established, if the host has still
 	// not written our table entry, set our 0x59 to 0 and then back to our mask with SetRoomMemberDataInternal (0x3206). np-matching2 pushes
@@ -53,6 +62,25 @@ type Config struct {
 	// 0x3204, RUDP Initiate. Why the host does not do that on its 0x3207 reply (EB 0xc96560 event 0x10c, the path a real joiner takes) is not
 	// known (mc4: nothing; mc5: only with this).
 	Nudge59 time.Duration
+}
+
+// GameEnv is what a game layer gets when the hello leaves: who we are on the PS3 side, who the host is (entry 0 of its table), the writer.
+type GameEnv struct {
+	Name      string
+	UID, Host [28]byte
+	Small     byte
+	// Write sends game bytes to the host (cut into 1,346-byte messages by the transport).
+	Write func(b []byte)
+	Logf  func(tag, format string, a ...any)
+	// Leave ends the run: the host is gone or the session is over (reason is logged).
+	Leave func(reason string)
+}
+
+// GameLayer is a game layer plugged into the joiner: Start after the hello, OnGame for every message of the host, Stop at the end.
+type GameLayer interface {
+	Start()
+	OnGame(b []byte)
+	Stop()
 }
 
 // nudgeStep is the pause between the experiment's two 0x59 writes (a var so the test can shorten it).
@@ -91,7 +119,9 @@ type probe struct {
 	roomKey   []byte
 	small     byte
 	uid       [28]byte
-	gl        *Game // the game layer, made when the hello leaves
+	gl        GameLayer // the game layer, made when the hello leaves
+	hostUID   [28]byte  // entry 0 of the host's player table
+	leave     chan string
 	wantRudp  string
 	rudpFrom  string
 	helloDone bool
@@ -107,18 +137,24 @@ func (s *probe) progress(f func(*Progress), what string) {
 	s.mu.Unlock()
 	if before != after {
 		s.rec.Logf("PROGRESS", "%s: %s", what, after)
+		if s.cfg.OnProgress != nil {
+			s.cfg.OnProgress(what, after)
+		}
 	}
 }
 
 // Run joins and records until Hold elapses, ctx ends or the session dies; it always prints the one-line summary.
 func Run(ctx context.Context, cfg Config) (Progress, error) {
-	rec, err := NewRecorder(cfg.OutDir, cfg.Label)
-	if err != nil {
-		return Progress{}, err
+	rec := cfg.Rec
+	if rec == nil {
+		var err error
+		if rec, err = NewRecorder(cfg.OutDir, cfg.Label); err != nil {
+			return Progress{}, err
+		}
+		defer rec.Close()
 	}
-	defer rec.Close()
-	s := &probe{cfg: cfg, rec: rec}
-	err = s.run(ctx)
+	s := &probe{cfg: cfg, rec: rec, leave: make(chan string, 1)}
+	err := s.run(ctx)
 	s.mu.Lock()
 	prog := s.prog
 	s.mu.Unlock()
@@ -140,13 +176,16 @@ func (s *probe) run(ctx context.Context) error {
 		cfg.Country = cfg.Domain[:2]
 		s.cfg = cfg
 	}
-	ticket, err := os.ReadFile(cfg.TicketFile)
-	if err != nil {
-		return err
+	ticket, pass, err := cfg.Ticket, cfg.Pass, error(nil)
+	if ticket == nil {
+		if ticket, err = os.ReadFile(cfg.TicketFile); err != nil {
+			return err
+		}
 	}
-	pass, err := loadPass(cfg.TitlesFile, cfg.Comm)
-	if err != nil {
-		return err
+	if pass == nil {
+		if pass, err = loadPass(cfg.TitlesFile, cfg.Comm); err != nil {
+			return err
+		}
 	}
 	// RT first: the host's offers toward a new member must find us signed in (run-live.sh learned this on Terraria).
 	cl, err := rtsig.DialRT(cfg.RT, cfg.RTTLS, cfg.Domain, ticket)
@@ -155,8 +194,10 @@ func (s *probe) run(ctx context.Context) error {
 	}
 	defer cl.Close()
 	rec.Logf("RT", "signed in as %s", cl.JID)
-	if s.udp, err = net.ListenUDP("udp4", &net.UDPAddr{Port: cfg.Port}); err != nil {
-		return err
+	if s.udp = cfg.Conn; s.udp == nil {
+		if s.udp, err = net.ListenUDP("udp4", &net.UDPAddr{Port: cfg.Port}); err != nil {
+			return err
+		}
 	}
 	defer s.udp.Close()
 	var sid uint16
@@ -236,6 +277,9 @@ func (s *probe) run(ctx context.Context) error {
 		case <-hold:
 			rec.Logf("DONE", "hold of %s over", cfg.Hold)
 			return nil
+		case why := <-s.leave:
+			rec.Logf("DONE", "%s", why)
+			return nil
 		case err := <-rtErr:
 			return fmt.Errorf("RT stream: %w", err)
 		case err := <-evErr:
@@ -257,20 +301,20 @@ func (s *probe) gameStats() lce.ClientStats {
 	s.mu.Lock()
 	g := s.gl
 	s.mu.Unlock()
-	if g == nil {
-		return lce.ClientStats{}
+	if st, ok := g.(interface{ Stats() lce.ClientStats }); ok {
+		return st.Stats()
 	}
-	return g.Stats()
+	return lce.ClientStats{}
 }
 
 func (s *probe) gameLost() error {
 	s.mu.Lock()
 	g := s.gl
 	s.mu.Unlock()
-	if g == nil {
-		return nil
+	if l, ok := g.(interface{ Lost() error }); ok {
+		return l.Lost()
 	}
-	return g.Lost()
+	return nil
 }
 
 func (s *probe) stopGame() {
@@ -437,6 +481,11 @@ func (s *probe) onFrame(f *ps3m2.Frame) {
 func (s *probe) updateTable(a57, a58 []byte, from string) {
 	es := ParseTable(a57, a58)
 	s.rec.Logf("TABLE", "%s: %d entries", from, len(es))
+	if len(es) > 0 && es[0].Index == 0 && es[0].UID != [28]byte{} {
+		s.mu.Lock()
+		s.hostUID = es[0].UID
+		s.mu.Unlock()
+	}
 	for _, e := range es {
 		s.rec.Logf("TABLE", "  [%d] member %#04x small id %d pad %d name %q uid=%x", e.Index, e.Member, e.Small, e.Pad, e.Name(), e.UID)
 	}
@@ -446,6 +495,14 @@ func (s *probe) updateTable(a57, a58 []byte, from string) {
 		s.mu.Unlock()
 		s.progress(func(p *Progress) { p.TableEntry = true }, "the host wrote our table entry")
 		s.maybeHello()
+	}
+}
+
+// endRun asks Run to return (the first reason counts).
+func (s *probe) endRun(reason string) {
+	select {
+	case s.leave <- reason:
+	default:
 	}
 }
 
@@ -569,7 +626,12 @@ func (s *probe) startRudp() {
 		s.progress(func(p *Progress) { p.RudpConnected = true }, "rudp context established")
 		s.maybeHello()
 	}
-	c.OnReset = func() { s.rec.Logf("RUDP", "the peer sent a RESET") }
+	c.OnReset = func() {
+		s.rec.Logf("RUDP", "the peer sent a RESET")
+		if s.cfg.NewGame != nil {
+			s.endRun("the host's RUDP connection was reset")
+		}
+	}
 	m := &ps3p2p.Msgr{C: c}
 	m.OnGame = s.onGame
 	m.OnAck = func() { s.rec.Logf("MSG", "rx ack (kind 3), %d kind-2 in flight", m.Inflight()) }
@@ -619,9 +681,13 @@ func (s *probe) maybeHello() {
 	}
 	s.helloDone = true
 	small, uid, m := s.small, s.uid, s.msgr
+	write := func(b []byte) { m.WriteGame(b, ps3p2p.GuessKind2Counted, time.Now()) }
 	// the game layer exists before the hello leaves: the host's first message can come right behind it
-	s.gl = &Game{Name: s.cfg.OnlineID, UID: uid, Logf: s.rec.Logf,
-		Write: func(b []byte) { m.WriteGame(b, ps3p2p.GuessKind2Counted, time.Now()) }}
+	if s.cfg.NewGame != nil {
+		s.gl = s.cfg.NewGame(GameEnv{Name: s.cfg.OnlineID, UID: uid, Host: s.hostUID, Small: small, Write: write, Logf: s.rec.Logf, Leave: s.endRun})
+	} else {
+		s.gl = &Game{Name: s.cfg.OnlineID, UID: uid, Logf: s.rec.Logf, Write: write}
+	}
 	g := s.gl
 	s.mu.Unlock()
 	h := Hello(small, uid)
@@ -631,7 +697,7 @@ func (s *probe) maybeHello() {
 		return
 	}
 	s.progress(func(p *Progress) { p.HelloSent = true }, "hello sent")
-	if s.cfg.PreLogin {
+	if s.cfg.PreLogin || s.cfg.NewGame != nil {
 		// E8 PreLogin goes out at once (lce.Client.Start); the 01 Login follows the host's 02, then keep-alive and position once it is in the world
 		s.rec.Logf("HELLO", "starting the login: E8 PreLogin as %q, then 01 Login after the host's 02", s.cfg.OnlineID)
 		g.Start()

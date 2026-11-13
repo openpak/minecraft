@@ -135,17 +135,24 @@ func (g *Game) toClient(cl *lce.Client, msg []byte) {
 	}
 }
 
-// noteUGC keeps the byte and int after the id list's header in the host's 02: ver short, UTF, byte, int (walk.clientPreLogin).
+// noteUGC keeps the host's friends-only byte and UGC players version from its 02.
 func (g *Game) noteUGC(p walk.Packet) {
+	u := NoteUGC(p)
+	g.mu.Lock()
+	g.ugc = u
+	g.mu.Unlock()
+}
+
+// NoteUGC returns the byte and int after the id list's header in a host's 02: ver short, UTF, byte, int (walk.clientPreLogin). The joiner's 01
+// echoes them (FixLogin).
+func NoteUGC(p walk.Packet) []byte {
 	i := p.Version + 2
 	n := int(int16(binary.BigEndian.Uint16(p.Raw[i:])))
 	i += 2
 	if n > 0 {
 		i += 2 * n
 	}
-	g.mu.Lock()
-	g.ugc = bytes.Clone(p.Raw[i : i+5])
-	g.mu.Unlock()
+	return bytes.Clone(p.Raw[i : i+5])
 }
 
 // fromClient takes what lce.Client sends (Wii U channel messages): channel 1 packets are translated and written to the host; the FE hello
@@ -177,23 +184,28 @@ func (g *Game) fromClient(msg []byte) {
 	}
 }
 
-// login makes the translated 01 a PS3 joiner's: both PlayerUID fields are ours (the host takes the first one unless it is empty, else the
-// second, for the new player, and refuses a second login of a UID already in the game with FF reason 0x19: EB 0xbc1a24, 0xb81e10), and the
-// byte and int after them are the host's own from its 02 (the host compares the int with the value it put in the 02 and answers a
-// mismatch with the 02 again instead of accepting: EB 0xbc1a24 `login+0x88 == netmgr+0xe4`, else 0xbc0edc).
+// login makes the translated 01 a PS3 joiner's (FixLogin) with our UID and the host's echoed pair.
 func (g *Game) login(b []byte) []byte {
+	g.mu.Lock()
+	ugc := g.ugc
+	g.mu.Unlock()
+	return FixLogin(b, g.UID, ugc)
+}
+
+// FixLogin makes a translated 01 Login a PS3 joiner's: both PlayerUID fields are uid (the host takes the first one unless it is empty, else
+// the second, for the new player, and refuses a second login of a UID already in the game with FF reason 0x19: EB 0xbc1a24, 0xb81e10), and
+// the byte and int after them are the host's own from its 02 (the host compares the int with the value it put in the 02 and answers a
+// mismatch with the 02 again instead of accepting: EB 0xbc1a24 `login+0x88 == netmgr+0xe4`, else 0xbc0edc). b is changed in place.
+func FixLogin(b []byte, uid [28]byte, ugc []byte) []byte {
 	q, err := walk.Next(b, walk.PS3)
 	if err != nil || len(q.UIDs) != 2 {
 		return b
 	}
 	for _, o := range q.UIDs {
-		copy(b[o:], g.UID[:])
+		copy(b[o:], uid[:])
 	}
-	g.mu.Lock()
-	ugc := g.ugc
-	g.mu.Unlock()
 	if len(ugc) == 5 {
-		copy(b[q.UIDs[1]+len(g.UID):], ugc)
+		copy(b[q.UIDs[1]+len(uid):], ugc)
 	}
 	return b
 }

@@ -229,6 +229,16 @@ func (d *Directory) Games() []Game {
 	return out
 }
 
+// Lookup is the game with this directory id, if the directory holds it.
+func (d *Directory) Lookup(id string) (Game, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if e := d.games[id]; e != nil {
+		return e.game, true
+	}
+	return Game{}, false
+}
+
 // RecentJoins is the last join attempts (at most 200), oldest first.
 func (d *Directory) RecentJoins() []Join {
 	d.mu.Lock()

@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.4.0
+
+The first cross-play session (prds#177): a Wii U joins a game a real PS3 hosts, through the service as an invisible bridge (docs/wiiu-into-ps3.md).
+
+- `internal/bridge`: `Session` relays one Wii U player's game stream to a PS3 host. The Wii U's FE hello is answered by the leg (FF hello: the host
+  under its own Wii U PID and the name its PS3 wrote into the game); the Wii U's channel-1 bytes are walked (`internal/lce/walk`), translated to
+  the PS3 dialect (net version 0x0884, PlayerUID 20 -> 28 bytes: the joiner's PS3 identity, the host's id paired with its table entry), E8 and 01
+  carry the joiner's PS3 online id, the 01 gets the PS3 specifics (`ps3join.FixLogin`, now shared), and written to the host after the PS3 hello;
+  the host's stream (kind 1/2 pieces cut anywhere) is walked, translated back and sent to the Wii U on channel 1, chunks (0x33) on channel 2 in
+  5,120-byte pieces. The Wii U's channel-3 tick and the PS3 hello have no counterpart and are produced or dropped by the leg. Either side leaving
+  ends both: the host's FF is passed on, the Wii U's FF or 20 s of silence ends the session, any other end sends the Wii U FF reason 3.
+- `bridge.Manager` (implements `relay.Bridge`): nex's push starts the session, the PS3 leg runs `ps3join.Run` as the JOINING player (account from the
+  Wii U PID, np-matching2 `GET /internal/bridge/identity`: online id, domain, NP ticket, title passphrase) on a UDP port of
+  `MINECRAFT_PS3_UDP_PORTS`; watchdogs end a leg that is not in the game in 2 min, a console that never connects in 90 s, one silent for 20 s.
+  A console whose session ended is refused, so it cannot start a new PS3 join by sending more packets.
+- `relay`: `LegSpec.Game` makes a leg a bridged one (host RVCID 0xFFF2 = the station URL nex hands out; the console's peer goes to the bridge,
+  not the Java world); a bridged leg without a bridge, or for a game the directory does not hold, is refused with 400.
+- `ps3join` is embeddable: `Config.Conn` (a socket the caller opened), `Rec` (a recorder the caller owns, `Quiet`), `Ticket`/`Pass` as bytes,
+  `NewGame` (a `GameLayer` replaces the probe's own player; `GameEnv.Leave` ends the run), `OnProgress`; RUDP reset ends a plugged run.
+- Trace per session (`MINECRAFT_BRIDGE_TRACE_DIR`): `.log` (states, every packet by name, raw and translated sizes, the PS3 leg in full), `.rx.bin`,
+  `.tx.bin`, `.wiiu.rx.bin`, `.wiiu.tx.bin`.
+- Env: `MINECRAFT_PS3_KEY` (np-matching2's NP_BRIDGE_KEY, also used by the directory) now also reaches `/internal/bridge/identity`;
+  new `MINECRAFT_PS3_M2_PLAIN`, `_M2_TLS`, `_RT`, `_RT_TLS`, `_BIND`, `_PUBLIC_IP`, `_UDP_PORTS`, `_WAIT_OFFER`, `MINECRAFT_BRIDGE_TRACE_DIR`,
+  `MINECRAFT_BRIDGE_OFF=1`.
+- Tests: `TestBridgedJoinEndToEnd` (a PIA 5 joiner built from the capture's console, the relay's bridged leg, the manager with a fake np-matching2,
+  a fake PS3 host answering with mc5's bytes: the host receives mc5's E8 byte for byte and the 01 with the PS3 identity, the Wii U receives the
+  FF hello, the translated 02 and the FF; the trace files), `TestLoginExchange` (byte-level, the 01 equals the one joinps3 sends),
+  `TestRechunk` (12 kB chunk packet cut at 1,346 bytes arrives as three 5,120-byte pieces), `TestEnds`, `TestPrepareRefuses`,
+  `TestSessionsDoNotHang`.
+
 ## 0.3.7
 
 - `joinps3` completes the PS3 login (prds#177; run mc5 2026-11-13 was the first game data from a real PS3 host). What mc5's 219 host bytes are, walked
