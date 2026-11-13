@@ -2,6 +2,7 @@ package directory
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"testing"
 )
@@ -17,6 +18,7 @@ func TestPS3SessionDataGolden(t *testing.T) {
 	want := append([]byte{}, gold...) // the 14:12 capture had the first name copy blank; a real host writes it (14:58 capture), so do we
 	copy(want[0x02:], "PS3Test")
 	want[0x13] = 0x80
+	want[ps3Loaded] = 1 // the golden is the 14:12 first update; every later one has +0xaf = 1 and the game's list needs it
 	if got := (PS3Codec{}).External(s, players); !bytes.Equal(got, want) {
 		t.Fatalf("round trip differs:\n got %x\nwant %x", got, want)
 	}
@@ -99,5 +101,31 @@ func TestPS3PresenceEqualsRealBlob(t *testing.T) {
 	own := PS3Codec{}.External(Settings{HostName: "PS3Test"}, 1)
 	if !bytes.Equal(own[2:0x14], ext[2:0x14]) || !bytes.Equal(PS3Codec{}.Presence(Settings{HostName: "PS3Test"}, 1, own)[:18], got[:18]) {
 		t.Fatalf("name fields: %x vs %x", own[:0x28], ext[:0x28])
+	}
+}
+
+// The session data we advertise for a Wii U-hosted game is a real PS3 host's final session data, byte for byte but for +0xa6 (a game-settings
+// value that differs between the recorded hostings: 0x3c, 0x3e), and it passes the filters the 01.84 joiner applies before it lists the game
+// (net version 0x0884, +0xad and +0xaf non-zero, EB 0xc87b04). The real bytes are the last 0x1207 of the 2026-11-13 15:49 hosting
+// (scratch/ps3-signaling-2026-11-09/matching2-2026-11-13.jsonl, conn 74, 15:54:15Z); +0xaf stayed 0 in the first updates of every hosting, which
+// is what the golden of TestPS3SessionDataGolden carries, and a joiner whose list drops the room goes back to the menu without a message.
+func TestPS3ExternalIsARealHostsFinalSessionData(t *testing.T) {
+	const real = "088450533354657374000000000000000000008050533354657374000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003e9d00000000000101011f00000000000000"
+	want, _ := hex.DecodeString(real)
+	for _, vis := range []string{Friends, FriendsOfFriend} {
+		got := PS3Codec{}.External(Settings{HostName: "PS3Test", Visibility: vis}, 1)
+		var diff []int
+		for i := range want {
+			if got[i] != want[i] {
+				diff = append(diff, i)
+			}
+		}
+		// the friends-of-friends bit is the Wii U twin's guess (+0xa7 low nibble 0xf, real hosts write 0xd)
+		if vis == Friends && !(len(diff) == 1 && diff[0] == 0xa6) {
+			t.Fatalf("session data differs from the real host at %v:\n got %x\nwant %s", diff, got, real)
+		}
+		if binary.BigEndian.Uint16(got) != PS3NetVersion || got[ps3Joinable] == 0 || got[ps3Loaded] == 0 {
+			t.Fatalf("the 01.84 room list drops this game: +0xad %d +0xaf %d", got[ps3Joinable], got[ps3Loaded])
+		}
 	}
 }

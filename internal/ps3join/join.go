@@ -304,7 +304,11 @@ func (s *probe) matching2(ticket, pass []byte) (*ps3m2.Client, error) {
 	}
 	low := binary.BigEndian.AppendUint16(nil, pick.ID[2])
 	// step 2: the discovery data the game checks before it joins (both external attrs, version 0x0884, +0xad and +0xaf non-zero)
-	lf, err := c.Call(ps3m2.CmdGetExtList, ps3m2.TLV(0x29, 4, []byte{0, 1}), ps3m2.TLV(0x3d, 4, low), ps3m2.TLV(0x05, 4, []byte{0, 0x55}), ps3m2.TLV(0x05, 4, []byte{0, 0x56}))
+	// asked the way the game's firmware asks (2026-11-13 16:02Z, real PS3): the room named by bits 47..32 (0x29) and 15..0 (0x3d) of its id, the
+	// attribute ids with their type nibble, and the four owner-info ids the library adds; plain 0x0055/0x0056 answered with fewer rooms than this
+	rid := func(b uint16) []byte { return binary.BigEndian.AppendUint16(nil, b) }
+	lf, err := c.Call(ps3m2.CmdGetExtList, ps3m2.TLV(0x29, 4, rid(pick.ID[0])), ps3m2.TLV(0x3d, 4, low), ps3m2.TLV(0x05, 4, rid(0x100c)),
+		ps3m2.TLV(0x05, 4, rid(0x100d)), ps3m2.TLV(0x05, 4, rid(0x000b)), ps3m2.TLV(0x05, 4, rid(0x206c)), ps3m2.TLV(0x05, 4, rid(0x2055)), ps3m2.TLV(0x05, 4, rid(0x2056)))
 	if err != nil {
 		rec.Logf("M2", "GetRoomDataExternalList: %v (continuing)", err)
 	} else {

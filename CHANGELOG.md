@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.5
+
+- Why a PS3 would still drop a Wii U-hosted game after np-matching2 v0.2.28 answers its list request (prds#177): the session data we
+  advertise had byte +0xaf = 0, copied from the golden, which is a real host's first update. The 01.84 list build (EB 0xc87b04) drops any
+  entry whose +0xaf is 0. All seven recorded hostings set +0xaf = 1 about 6 s after creating the room and never change it back, so
+  `PS3Codec.External` writes 1. Test: `TestPS3ExternalIsARealHostsFinalSessionData` (the last 0x1207 of the 2026-11-13 hosting, every byte but
+  the +0xa6 game setting, and the joiner's version/+0xad/+0xaf filter).
+- `joinps3` asks GetRoomDataExternalList the way the real game does (typed ids 0x2055/0x2056 plus the four owner-info ids, `0x29` = room id bits 47..32), so a probe run exercises the list path a real PS3 takes.
+- `docs/session-mapping.md`: the joiner's checks in order, what the 2026-11-13 run proved, and the NpId a PS3 uses toward a bridged host.
+
 ## 0.3.4
 
 - Why mc4 (2026-11-13) had no RUDP after signalling was established (prds#177, transport note §7, static on the 01.84 EBOOT and lv2 4.93):

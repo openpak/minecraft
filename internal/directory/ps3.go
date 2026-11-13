@@ -31,6 +31,7 @@ const (
 	ps3Vis        = 0xa7 // low byte of the u16 at 0xa6 (0x3c9d in the capture); low nibble 0xf = friends of friends (guess, by the Wii U twin)
 	ps3Joinable   = 0xad // 1 in the capture; the 01.84 room list keeps a room only when it is non-zero
 	ps3Players    = 0xae // player count of the host's console
+	ps3Loaded     = 0xaf // 0 when the host creates the room, 1 about 6 s later (all 7 hostings recorded); the 01.84 room list drops a room whose +0xaf is 0
 	ps3Nibbles    = 0xb0 // two nibbles, 0x1f in the capture
 	ps3TableLen   = 128  // data of attribute 0x57 and of 0x58
 	ps3PresentLen = 56   // the presence data blob (builder 0xc93cd4; friend filter requires size 0x38)
@@ -73,6 +74,7 @@ func (PS3Codec) External(s Settings, players int) []byte {
 		b[ps3Vis] = b[ps3Vis]&0xf0 | 0x0f
 	}
 	b[ps3Joinable] = 1
+	b[ps3Loaded] = 1 // the golden is the host's first update (+0xaf = 0): a game advertised for joining is the later one, and a joiner's list needs it
 	b[ps3Players] = byte(max(0, min(players, 255)))
 	return b
 }

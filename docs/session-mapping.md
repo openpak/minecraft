@@ -45,7 +45,7 @@ them (nex `bridged.go`, np-matching2 `agent/bridge.go`, np-community `xmpp/bridg
 | `HostName` | NUL-terminated at +0x17 (17 bytes) and again at +0x02 (9 bytes) | NUL-terminated at +0x14 (17 bytes) |
 | `Visibility` friends / friends-of-friends | byte +0xc3: `0x8f` friends of friends, otherwise friends | low nibble of byte +0xa7: `0xf` friends of friends, otherwise friends |
 | `Players` | byte +0xca | byte +0xae |
-| joinable flag | byte +0xc9 = 1 (kept from the template) | byte +0xad = 1 (set) |
+| joinable flag | byte +0xc9 = 1 (kept from the template) | byte +0xad = 1 (set) and byte +0xaf = 1 (set; a real host writes 0 in its first update and 1 about 6 s later) |
 | `MaxPlayers` | gathering `max_participants` (nex) | Matching2 max slot = core session max members |
 | `State` open / closed | `open_participation` of the matchmake session, `registered` of the gathering | a room is listed only while open with a free slot; a full or closed room drops out of `Hosted` and is withdrawn elsewhere |
 
@@ -58,6 +58,7 @@ Proof per field:
 * **Visibility, PS3**: **guess**. The captured PS3 byte at +0xa7 is `0x9d`, the twin of the Wii U `0x8d` two bytes into the same `3c 8d` / `3c 9d` pair, at the same distance from the player count; `0xf` low nibble for friends of friends is carried over, nobody has seen a PS3 friends-of-friends game.
 * **Players, PS3 +0xae**: **log** (value 1 for the lone host) and **static** (01.02 `ps3-static` §2.4: "u8 player count at +0xae, the popcount of the host's local mask"; 01.84 keeps the offsets). **Players, Wii U +0xca**: **guess** (the same structural position as the PS3 byte; the capture row holds 2). `Hosted` on the Wii U side does not use it: the count is the number of participants nex lists (**code**).
 * **Joinable flag, PS3 +0xad**: **log** (1) and **static** (the 01.84 room-list filter at 0xc87dec drops a room whose +0xad is 0). Wii U +0xc9: **capture** (1, template).
+* **Loaded flag, PS3 +0xaf**: **log** (all seven hostings in the recorders, 2026-11-11 and 2026-11-13: 0 in the 0x1202 and the first three 0x1207, 1 in the fourth, 6-8 s after creation, never changed back) and **static** (the same 01.84 list build, EB 0xc87b04: entry +0x107 = session +0xaf, dropped when 0). Until 2026-11-13 the golden's first update was copied unchanged, so +0xaf was 0 and the game would have dropped the bridged game from its list even after the list request succeeded.
 * **Everything else in both blobs** (PS3 +0x00..0x13, 0x25.., +0xa6, +0xb0 `0x1f`, +0xb4; Wii U +0x0b..0x16, +0xc2, +0xcb, +0xcc `0x0f`) is copied from the real host's bytes (**log**, **capture**) and not translated. Not translated also: world type, difficulty, game mode shown in the Wii U "survival, easy" text (where they live is not mapped), texture pack, host skin.
 * **Max players** PS3: **log** (`max_slot=8` in `matching2 room created`); 01.84 computes the slot count, so a host with another value is **static** only ([C] in ps3-0184-vs-wiiu §7). Wii U 8: **capture** N1.
 
@@ -79,6 +80,18 @@ room has no room key and no console connection, the agent's latest-room and room
 shown unless the real console's own presence carries game data (an `ext` element: it is hosting itself). The real console's plain
 sign-in presence (mode=game, no data) does not hide it. A change (PUT with new content, DELETE) is pushed to the viewers already online at
 once; a viewer who signs in later gets it with the roster.
+
+### The PS3 joiner's checks, in order (01.84, static + the 2026-11-13 hardware run)
+
+1. **Friend list** (EB 0xc960fc..0xc96150): presence data size 0x38, u16 @0x28 = 0x0884, byte @0x2b = 0. Keeps room id @0x18 (u64) and server id @0x20 (u16).
+2. **GetRoomDataExternalList** (EB 0xc94f08): the game asks for attribute ids 0x55 and 0x56; the firmware sends them as `0x2055`, `0x2056` (type nibble << 12 | id) with four ids of its own for the owner info it parses (`0x000b`, `0x100c`, `0x100d`, `0x206c`), and names the room with two u16 of the room id from the blob (`0x29` = bits 47..32, `0x3d` = bits 15..0: 0xced4 and 0xc58c for room 0x0001ced40a83c58c). Reply handler (EB 0xc96560 event 5): result 0, **exactly one room**, and `room.binAttrExternalNum == 2` (the firmware counts the 0x54/0x55/0x56 elements of the item); anything else calls the failure callback, which returns to the list silently. The two attributes are copied by position (EB 0xc896a0: first 0x5c bytes of the first, then of the second; no id or size check beyond the count).
+3. **List build** (EB 0xc87b04, entries of 0x40 bytes with the 184 bytes at +0x58): session +0x00 == 0x0884, +0xad != 0, +0xaf != 0, else the entry is dropped. Nothing else is tested here (no name, slot, flag, password or friends-only check; those fields are only displayed or used later).
+4. **GetServerInfo(server id from the blob = 1)**: status byte 1 (np-matching2 serves it per title); **CreateServerContext**; **JoinRoom** (roomId from the blob, 0x59 = pad mask).
+5. **JoinRoom reply** (event 0x102): own member = member list `me`, room id, the host's table from 0x57/0x58, state 0x1b; then the firmware signals toward the member flagged owner (flag attr 0x80000000), using its NpId (0x0b of the member) and the room's star option (0x6d = `02 00 ..`).
+
+What the 2026-11-13 16:02Z run proved: np-matching2 matched the request to the bridged room and answered with one room, but the item carried no 0x55/0x56 (the reply filtered on the raw ids `0x55`, `0x56` and the request had `0x2055`, `0x2056`), so check 2 failed. Fixed in np-matching2 v0.2.28 (ids matched on their low 12 bits); +0xaf fixed here (check 3).
+
+**NpId a PS3 uses toward a bridged host (decision).** The host has never signed in on a PS3, so its NpId is the one every account without a PS3 login gets: online id from its NP link + 8 option bytes `<cc><cc>ps3` (`cc` = the account's country, `us` when unknown), in the owner's member entry (0x0b) and in the list item. The PS3 addresses signalling to `<online id>@<cc>.<cc>.np.playstation.net/ps3` (seen 2026-11-13 15:49: `PS3Test` to `SwitchTest@gb.gb.np.playstation.net/ps3`, the same derivation), which np-community captures by online-id prefix and now holds without answering (v0.4.13) so the joiner keeps waiting for the transport leg instead of being told the user is unavailable. The host's NP link must exist before the room does (np-community creates it with the presence PUT, which the directory sends right after the room PUT; the room server falls back to a 16-character display name until then).
 
 ## 4. Wii U native objects the sink writes (nex minecraft-wiiu, nn-friends)
 
