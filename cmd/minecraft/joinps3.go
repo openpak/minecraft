@@ -42,6 +42,7 @@ func joinps3() error {
 	fs.DurationVar(&c.Hold, "hold", 5*time.Minute, "how long to stay in the world")
 	fs.IntVar(&c.Pad, "pad", 0, "our pad index (RUDP port = pad + 1)")
 	fs.BoolVar(&c.PreLogin, "prelogin", true, "send E8 PreLogin after the hello")
+	fs.DurationVar(&c.Nudge59, "nudge59", 0, "experiment: this long after signalling is established, if the host has not added us, set 0x59 to 0 and back (0x3206) so the host's 0x1107 path adds us (0 = off)")
 	fs.Parse(os.Args[2:])
 	if c.HostID == "" || c.TicketFile == "" || c.TitlesFile == "" || c.PublicIP == "" {
 		return fmt.Errorf("joinps3 needs -host, -ticket-file, -titles and -public-ip")

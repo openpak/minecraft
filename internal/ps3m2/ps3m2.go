@@ -17,6 +17,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -33,7 +34,8 @@ const (
 	CmdGetExtList   = 0x1208 // GetRoomDataExternalList
 	CmdJoinRoom     = 0x3201
 	CmdLeaveRoom    = 0x3202
-	CmdGetMember    = 0x3207
+	CmdSetMember    = 0x3206 // SetRoomMemberDataInternal: 0x16 member id, 0x59 (the room server pushes 0x320d to the others)
+	CmdGetMember    = 0x3207 // GetRoomMemberDataInternal: 0x16 member id, 0x05 attr id; reply = one 0x4b member
 
 	EvMemberJoined = 0x320c
 	EvMemberData   = 0x320d
@@ -186,8 +188,7 @@ func Dial(plainAddr, tlsAddr, serverName string) (*Client, error) {
 }
 
 func (c *Client) id() [4]byte {
-	c.seq++
-	v := 0x10100000 + c.seq
+	v := 0x10100000 + atomic.AddUint32(&c.seq, 1)
 	return [4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)}
 }
 
@@ -305,6 +306,16 @@ func (c *Client) Events(fn func(*Frame)) error {
 		}
 		fn(f)
 	}
+}
+
+// Send writes a request on the plain connection without reading the reply: once Events runs, the reply arrives there (Kind 2).
+func (c *Client) Send(cmd uint16, elems ...[]byte) error {
+	return c.write(c.Plain, Request(c.Key, cmd, c.id(), elems...))
+}
+
+// MemberBin is the member bin attr 0x59 as JoinRoom and SetRoomMemberDataInternal carry it: 8 zero bytes (update time), then TLV 0x01 data.
+func MemberBin(data []byte) []byte {
+	return TLV(0x59, 0, append(make([]byte, 8), TLV(0x01, 2, data)...))
 }
 
 // Leave sends LeaveRoom (0x3202) without waiting for the reply (the Events reader takes it); call it last.

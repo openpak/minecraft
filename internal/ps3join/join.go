@@ -46,7 +46,15 @@ type Config struct {
 	Hold              time.Duration
 	Pad               int
 	PreLogin          bool // send E8 after the hello, as a PS3 joiner does
+
+	// Nudge59 (experiment, 0 = off): this long after signalling is established, if the host has still not written our table entry, set our
+	// 0x59 to 0 and then back to our mask with SetRoomMemberDataInternal (0x3206). np-matching2 pushes each change to the host as 0x320d;
+	// the host's 0x1107 handler (EB 0xc96ea0) adds the new pads exactly as its 0x3207 path would: AddPlayer, 0x3204, RUDP Initiate.
+	Nudge59 time.Duration
 }
+
+// nudgeStep is the pause between the experiment's two 0x59 writes (a var so the test can shorten it).
+var nudgeStep = 3 * time.Second
 
 // Progress is how far a run got.
 type Progress struct {
@@ -84,6 +92,8 @@ type probe struct {
 	wantRudp  string
 	rudpFrom  string
 	helloDone bool
+	m2        *ps3m2.Client
+	estOnce   sync.Once
 }
 
 func (s *probe) progress(f func(*Progress), what string) {
@@ -179,6 +189,7 @@ func (s *probe) run(ctx context.Context) error {
 		rec.Logf("SIGNAL", "MUTUAL ACTIVATED, host endpoint %s:%d", c.Address, c.Port)
 		s.progress(func(p *Progress) { p.Signalling, p.Established = true, true }, "mutual activation")
 		s.want("mutual activation")
+		s.afterEstablished()
 	}
 	go s.readLoop()
 	rtErr := make(chan error, 1)
@@ -196,6 +207,9 @@ func (s *probe) run(ctx context.Context) error {
 		return fmt.Errorf("matching2: %w", err)
 	}
 	defer m2.Close()
+	s.mu.Lock()
+	s.m2 = m2
+	s.mu.Unlock()
 	defer func() { // leave the room so the next run joins fresh (the host raises MemberJoined only for a new member)
 		m2.Leave()
 		time.Sleep(500 * time.Millisecond)
@@ -304,8 +318,7 @@ func (s *probe) matching2(ticket, pass []byte) (*ps3m2.Client, error) {
 		}
 	}
 	// step 4: JoinRoom with the pad mask (member attr 0x59) and the public endpoint a console publishes
-	mask := []byte{0, 0, 0, 1 << s.cfg.Pad}
-	join := [][]byte{ps3m2.TLV(0x3e, 4, low), ps3m2.TLV(0x59, 0, append(make([]byte, 8), ps3m2.TLV(0x01, 2, mask)...))}
+	join := [][]byte{ps3m2.TLV(0x3e, 4, low), ps3m2.MemberBin(s.mask())}
 	if ip := net.ParseIP(cfg.PublicIP).To4(); ip != nil {
 		join = append(join, ps3m2.TLV(0x6e, 2, ip), ps3m2.TLV(0x13, 3, []byte{2}))
 	}
@@ -335,16 +348,31 @@ func (s *probe) matching2(ticket, pass []byte) (*ps3m2.Client, error) {
 	return c, nil
 }
 
-// onFrame handles whatever the room server pushes: room events, with the MAC checked against the room key.
+// onFrame handles whatever the room server sends after the join: room events (MAC checked against the room key) and the replies to the
+// requests sent after Events started (MAC checked against the session key).
 func (s *probe) onFrame(f *ps3m2.Frame) {
-	mac := "no room key"
-	if s.roomKey != nil {
+	key, mac := s.roomKey, "no room key"
+	if f.Kind == ps3m2.KindReply {
+		s.mu.Lock()
+		if s.m2 != nil {
+			key = s.m2.Key
+		}
+		s.mu.Unlock()
+	}
+	if key != nil {
 		mac = "MAC bad"
-		if f.Verify(s.roomKey) {
+		if f.Verify(key) {
 			mac = "MAC ok"
 		}
 	}
 	s.rec.Logf("M2-EVENT", "kind %d cmd %#04x result %d len %d %s hex=%s", f.Kind, f.Cmd, f.Result, len(f.Raw), mac, Hex(f.Raw))
+	if f.Kind == ps3m2.KindReply && f.Cmd == ps3m2.CmdGetMember {
+		if m, ok := ps3m2.ParseMember(f.Elements()[0x4b]); ok {
+			s.rec.Logf("M2", "diag: 0x3207 reply: member %#04x %s 0x59=%x (the host adds that many pads; empty 0x59 or no 0x4b = the host adds nobody)", m.ID, m.Name, m.Bin59)
+		} else {
+			s.rec.Logf("M2", "diag: 0x3207 reply has no 0x4b member: a host on this server never adds a joiner through its 0x5102 path")
+		}
+	}
 	if f.Cmd == ps3m2.EvRoomData {
 		a57, a58 := ps3m2.RoomAttrs(f.Body, 0)
 		s.updateTable(a57, a58, "0x320e UpdatedRoomDataInternal")
@@ -364,6 +392,48 @@ func (s *probe) updateTable(a57, a58 []byte, from string) {
 		s.progress(func(p *Progress) { p.TableEntry = true }, "the host wrote our table entry")
 		s.maybeHello()
 	}
+}
+
+func (s *probe) mask() []byte { return []byte{0, 0, 0, 1 << s.cfg.Pad} }
+
+func (s *probe) afterEstablished() { s.estOnce.Do(func() { go s.postEstablished() }) }
+
+// postEstablished runs once signalling is established. The host's game now (EB 0xc9735c, event 0x5102) asks the room server for our 0x59
+// with GetRoomMemberDataInternal (0x3207) and does everything else, AddPlayer, 0x3204 with our table entry, its P2P socket, RUDP Initiate,
+// only in the handler of that reply (EB 0xc96560 event 0x10c). We send the same request for ourselves so the log shows what the host gets.
+// With Nudge59 set, the 0x1107 route is tried as well (Config.Nudge59).
+func (s *probe) postEstablished() {
+	s.mu.Lock()
+	m2, member := s.m2, s.member
+	s.mu.Unlock()
+	if m2 == nil || member == 0 {
+		s.rec.Logf("M2", "diag: no Matching2 session or member id at signalling Established, nothing sent")
+		return
+	}
+	id := []byte{byte(member >> 8), byte(member)}
+	s.rec.Logf("M2", "diag: GetRoomMemberDataInternal(our member %#04x, attr 0x59), the request the host sends on 0x5102 (EB 0xc97438)", member)
+	if err := m2.Send(ps3m2.CmdGetMember, ps3m2.TLV(0x16, 4, id), ps3m2.TLV(0x05, 4, []byte{0, 0x59})); err != nil {
+		s.rec.Logf("M2", "diag: 0x3207: %v", err)
+	}
+	if s.cfg.Nudge59 <= 0 {
+		return
+	}
+	time.Sleep(s.cfg.Nudge59)
+	s.mu.Lock()
+	seen := s.prog.TableEntry
+	s.mu.Unlock()
+	if seen {
+		s.rec.Logf("EXPERIMENT", "nudge59 skipped: the host already wrote our table entry (its 0x3207 path works)")
+		return
+	}
+	for i, v := range [][]byte{{0, 0, 0, 0}, s.mask()} {
+		s.rec.Logf("EXPERIMENT", "nudge59 step %d/2: SetRoomMemberDataInternal 0x59=%x; np-matching2 pushes 0x320d, the host's 0x1107 handler (EB 0xc96ea0) adds the new pads: AddPlayer, 0x3204, RUDP Initiate", i+1, v)
+		if err := m2.Send(ps3m2.CmdSetMember, ps3m2.TLV(0x16, 4, id), ps3m2.MemberBin(v)); err != nil {
+			s.rec.Logf("EXPERIMENT", "nudge59 step %d: %v", i+1, err)
+		}
+		time.Sleep(nudgeStep)
+	}
+	s.rec.Logf("EXPERIMENT", "nudge59 done: success = a TABLE line with our member id (0x320e) and UDP-RX kind-6 from the host; nothing = the host never got 0x320d")
 }
 
 func (s *probe) onProbe(c rtsig.Candidate) {
@@ -572,6 +642,7 @@ func (s *probe) readLoop() {
 				s.mu.Unlock()
 				s.progress(func(p *Progress) { p.Signalling, p.Established = true, true }, "host established")
 				s.want("host established")
+				s.afterEstablished()
 			}
 		case dv == rtsig.VPortSignal && len(body) == 0x58 && body[0] <= 2:
 			if !s.p.FromHost(body) {

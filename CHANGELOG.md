@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.4
+
+- Why mc4 (2026-11-13) had no RUDP after signalling was established (prds#177, transport note §7, static on the 01.84 EBOOT and lv2 4.93):
+  the PS3 host opens its P2P socket and Initiates RUDP only after it has added the joiner, and it adds the joiner only in the handler of
+  its GetRoomMemberDataInternal (0x3207) reply (EB 0xc9735c event 0x5102 -> EB 0xc96560 event 0x10c -> AddPlayer EB 0xc95900 -> 0x3204 ->
+  EB 0xc943e0). mc4 shows no 0x320e with our entry, so that reply never succeeded. Until the host binds UDPP2P vport 1 the kernel drops
+  every kind-6 datagram before decrypting it (K 0x16063c), so our 284 SYNs, which are correct (the MAC verifies with the PS3's skey and
+  they decrypt to a class-2 SYN on port 1), went nowhere.
+- `joinps3` sends the host's own request for itself after signalling is established (0x3207, our member, attr 0x59) and logs the reply's
+  member and 0x59 (`diag: 0x3207 reply`), so the log shows what the host's AddPlayer gets from the room server.
+- `joinps3 -nudge59 <d>` (experiment, off by default): if the host has not added us `<d>` after Established, write our 0x59 as 0 and then as
+  the mask with SetRoomMemberDataInternal (0x3206). np-matching2 pushes each as 0x320d; the host's 0x1107 handler (EB 0xc96ea0) adds new
+  pads the same way, AddPlayer and RUDP Initiate included. Logged as `EXPERIMENT nudge59 ...`.
+- `ps3m2`: `Client.Send` (a request whose reply arrives on the Events reader), `MemberBin`, `CmdSetMember`; replies after the join are MAC
+  checked with the session key. Test: the three post-Established requests on the wire.
+
 ## 0.3.3
 
 - `rtsig` (prds#145, research §42): an iq `error` (the peer refusing one of our sets, vsh code in `<x code=..>`, `Stanza.ErrCode`) is reported

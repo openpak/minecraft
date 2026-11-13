@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"io"
 	"net"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/openpak/minecraft/internal/ps3m2"
 	"github.com/openpak/minecraft/internal/ps3p2p"
 	"github.com/openpak/minecraft/internal/rtsig"
 )
@@ -136,4 +138,47 @@ func waitUntil(t *testing.T, what string, f func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timeout: %s", what)
+}
+
+// After signalling is established the probe asks for its own 0x59 (0x3207, the host's own request on 0x5102) and, with the nudge59
+// experiment, writes 0x59 = 0 then the mask (0x3206) so the room server pushes 0x320d to the host. Checked on the wire, MAC included.
+func TestPostEstablishedRequests(t *testing.T) {
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	key := bytes.Repeat([]byte{0x33}, 16)
+	rec, err := NewRecorder(t.TempDir(), "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rec.Close()
+	nudgeStep = time.Millisecond
+	s := &probe{cfg: Config{Nudge59: time.Millisecond}, rec: rec, member: 0x20, m2: &ps3m2.Client{Plain: a, Key: key}}
+	go s.postEstablished()
+	want := []struct {
+		cmd  uint16
+		el   uint16
+		data []byte
+	}{
+		{ps3m2.CmdGetMember, 0x05, []byte{0, 0x59}},
+		{ps3m2.CmdSetMember, 0x59, append(make([]byte, 8), ps3m2.TLV(0x01, 2, []byte{0, 0, 0, 0})...)},
+		{ps3m2.CmdSetMember, 0x59, append(make([]byte, 8), ps3m2.TLV(0x01, 2, []byte{0, 0, 0, 1})...)},
+	}
+	for i, w := range want {
+		b.SetReadDeadline(time.Now().Add(5 * time.Second))
+		hdr := make([]byte, ps3m2.HeaderLen)
+		if _, err := io.ReadFull(b, hdr); err != nil {
+			t.Fatalf("frame %d: %v", i, err)
+		}
+		raw := append(hdr, make([]byte, int(binary.BigEndian.Uint16(hdr[2:]))-ps3m2.HeaderLen)...)
+		io.ReadFull(b, raw[ps3m2.HeaderLen:])
+		f, _, err := ps3m2.ParseFrame(raw)
+		if err != nil || f.Cmd != w.cmd || !f.Verify(key) {
+			t.Fatalf("frame %d: cmd %#04x err %v (want %#04x, MAC with the session key)", i, f.Cmd, err, w.cmd)
+		}
+		el := f.Elements()
+		if !bytes.Equal(el[0x16], []byte{0, 0x20}) || !bytes.Equal(el[w.el], w.data) {
+			t.Fatalf("frame %d: elements %x", i, f.Body)
+		}
+	}
 }
