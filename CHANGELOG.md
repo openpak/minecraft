@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.6
+
+- `ps3p2p` takes the RUDP values a real PS3 showed (prds#177, #145; run live10 2026-11-13, a Terraria host's SYN and RESET, decoded against
+  librudp.prx in research matching2 note §43 and transport note §8). Same library, so they carry over: window byte 0xff -> 0x30, MSS 1350 -> 1410
+  (0x582, the library default; payload per segment 1346 = `MaxPiece`), cap word 0 -> 0x0201 and mirrored from the console's own SYN (librudp
+  silently aborts when the peer's cap bits differ from its flags, so the old SYN would have been refused once the host's socket existed),
+  version words confirmed (refused as the library does: verA < 0x0100 or verB > 0x0100), class 2 + port 1 confirmed.
+- The SYN / SYN+ACK retransmit timer is librudp's: 1 s doubling to 16 s (the console showed 1, 2, 4, 8 s, then a RESET reason 3 at its 30 s
+  connect timeout). `Describe` decodes the RESET block (reason, connection id); the SYN block is read after the options, in librudp's order.
+- `guess.go` now separates "seen on hardware" (MSS, window, cap, versions, SYN timer) from what is still a guess (data RTO, keepalive,
+  empty-ack form, kind 1/2 use, hello pad). `TestReplayRealConsoleSynAndReset` replays the console's two datagrams and asserts our reply byte for
+  byte; `TestSynBackoff` pins the timer.
+
 ## 0.3.5
 
 - Why a PS3 would still drop a Wii U-hosted game after np-matching2 v0.2.28 answers its list request (prds#177): the session data we

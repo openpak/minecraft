@@ -2,27 +2,35 @@ package ps3p2p
 
 import "time"
 
-// Every value below is a GUESS: the spec (ps3-0184-p2p-transport-2026-11-11.md §2.2, §6) could not read it from the binaries, because the
-// game sets no librudp option and the library's own defaults are not decoded. The first real capture (the PS3's SYN carries its MSS,
-// its keepalive cadence and its retransmit timing show the rest) confirms or corrects each one; change them here and nowhere else.
+// Seen on hardware (run live10, 2026-11-13: a real PS3's SYN and RESET, `ffc3 0101 8014 0001 80 30 3d4c 0201 0100 0100 f8ba92b1 0582` and
+// `ffc3 0101 800e 0001 c0 00 0000 0003 f8ba92b1`, and librudp.prx 4.93; matching2 note §43, transport note §8). These were guesses until then.
 const (
-	// GuessMSS is the maximum segment size we put in our SYN block. The game's largest message is 4 + 1346 bytes and 1346 is a game
-	// constant (EB 0xc8a0d4), which suggests the library MSS is at least 1350; the PS3's own SYN shows the real value.
-	GuessMSS = 1350
+	// MSS is librudp's default (0x582 = 1410): the console's SYN carries it, nothing sets an option (R 0x194c0, R 0x1a7b4). The usable
+	// payload per segment is MSS-0x40 = 1346 = MaxPiece, which is where the game's 0x542 comes from. A peer's MSS is clamped to [0x40, MSS].
+	MSS = 0x582
 
-	// GuessWindowByte is the window byte of every packet: 0xff = (0x3f) << 6 = 4032 (what the Terraria probe sends; the PS3 accepted it).
-	GuessWindowByte = 0xff
+	// WindowByte is the window byte of every packet the console sends: 0x30 = 48 segments (`(b&0x3f) << ((b>>5)&6)`, R 0xd3b0).
+	WindowByte = 0x30
 
-	// GuessCapWord and GuessVer are the SYN block's capability word and the two version words (0x0100 / 0x0100, the only values the
-	// Terraria PS3 accepted; the §26 decode says they must be 0x0100-compatible).
-	GuessCapWord = 0x0000
-	GuessVerA    = 0x0100
-	GuessVerB    = 0x0100
+	// CapWord is the capability word of the console's SYN block. Bits 0x800 / 0x200 / 0x100 are the sender's flags and the receiver silently
+	// aborts (reason 5 or 6, no packet) unless they equal its own (R 0xd318), so a peer mirrors the console's word once it has seen one:
+	// Conn does. The low nibble (1) is copied as seen; nothing reads it.
+	CapWord = 0x0201
 
-	// GuessSynRetry is how often an unanswered SYN is repeated. A real library retransmits on its own timer; ours only has to be
-	// as eager as the PS3's, which is unknown.
-	GuessSynRetry = time.Second
+	// VerA and VerB are both 0x0100 on the wire; the receiver needs verA >= 0x0100 and verB <= 0x0100 (reason 4 otherwise).
+	VerA = 0x0100
+	VerB = 0x0100
 
+	// SynRetryFirst and SynRetryMax are the retransmit timer of an unanswered SYN (and of a SYN+ACK): 1 s, doubling, capped at 16 s.
+	// Seen: SYNs 1, 2, 4, 8 s apart, then a RESET (reason 3, R 0xf560 -> abort R 0xb44c -> sender R 0xb280) after the 30 s connect timeout; ctx+0xa8 = 1000000 us at
+	// start, cap 0xf42400 us (R 0xd778).
+	SynRetryFirst = time.Second
+	SynRetryMax   = 16 * time.Second
+)
+
+// Still a GUESS: the values below were not read from the binaries or seen on the wire. The first captured data exchange confirms or
+// corrects each one; change them here and nowhere else.
+const (
 	// GuessRTO is the data retransmission timeout (go-back-N: everything unacked is resent).
 	GuessRTO = 500 * time.Millisecond
 

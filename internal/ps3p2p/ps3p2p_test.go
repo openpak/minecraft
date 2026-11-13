@@ -3,6 +3,7 @@ package ps3p2p
 import (
 	"bytes"
 	"encoding/hex"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -62,10 +63,10 @@ func TestSynFrame(t *testing.T) {
 	var got []byte
 	c := NewConn(1, 0x1000, 0x01020304, func(d []byte) { got = d })
 	c.Start(time.Now())
-	if len(got) != 20 || got[0] != 0x80 || got[1] != 0x14 || got[2] != 0 || got[3] != 1 || got[4] != 0x80 || got[5] != GuessWindowByte {
+	if len(got) != 20 || got[0] != 0x80 || got[1] != 0x14 || got[2] != 0 || got[3] != 1 || got[4] != 0x80 || got[5] != WindowByte {
 		t.Fatalf("syn frame %x", got)
 	}
-	if hex.EncodeToString(got[4:]) != "80ff1000"+"0000"+"01000100"+"01020304"+"0546" {
+	if hex.EncodeToString(got[4:]) != "80301000"+"0201"+"01000100"+"01020304"+"0582" {
 		t.Errorf("syn packet %x", got[4:])
 	}
 }
@@ -133,7 +134,7 @@ func waitFor(t *testing.T, what string, f func() bool) {
 func TestLoopbackMessages(t *testing.T) {
 	a, b, _ := pair(t, nil)
 	waitFor(t, "both established", func() bool { return a.C.Established() && b.C.Established() })
-	if a.C.PeerMSS() != GuessMSS {
+	if a.C.PeerMSS() != MSS {
 		t.Errorf("peer MSS %d", a.C.PeerMSS())
 	}
 	var mu sync.Mutex
@@ -210,4 +211,61 @@ func TestLoopbackRetransmit(t *testing.T) {
 	mu.Unlock()
 	tick(time.Now().Add(GuessRTO + time.Millisecond))
 	waitFor(t, "both after the retransmit, in order", func() bool { mu.Lock(); defer mu.Unlock(); return n == 2 })
+}
+
+// The two datagrams a real PS3 (Terraria v01.12) sent on run live10, 2026-11-13, without the UDPP2P header (`ff c3 01 01`), which here is
+// the kind-6 layer's business: its SYN and its reset. The Minecraft leg runs the same librudp, so the same replies are proven for it.
+func TestReplayRealConsoleSynAndReset(t *testing.T) {
+	var out [][]byte
+	c := NewConn(1, 0x1000, 0xaaaa0001, func(d []byte) { out = append(out, append([]byte(nil), d...)) })
+	c.Start(time.Now())
+	out = nil
+	var lines []string
+	c.Trace = func(dir, desc string, _ []byte) { lines = append(lines, dir+" "+desc) }
+	c.Handle(mustHex("80140001"+"80303d4c"+"0201"+"0100"+"0100"+"f8ba92b1"+"0582"), time.Now())
+	want := "80160001" + "a0301000" + "3d4d" + "0201" + "0100" + "0100" + "aaaa0001" + "0582"
+	if len(out) != 1 || hex.EncodeToString(out[0]) != want {
+		t.Fatalf("reply to the console's SYN = %x, want %s", out, want)
+	}
+	if c.PeerMSS() != 0x582 || c.Established() {
+		t.Errorf("peer mss %d established %v", c.PeerMSS(), c.Established())
+	}
+	if !strings.Contains(strings.Join(lines, "\n"), "rx SYN flags=0x00 win=0x30 seq=0x3d4c cap=0x0201 verA=0x0100 verB=0x0100 connid=0xf8ba92b1 mss=1410") {
+		t.Errorf("trace:\n%s", strings.Join(lines, "\n"))
+	}
+	// its handshake-completing data packet with the ack flag (rule from the librudp decode, state 3)
+	c.Handle(mustHex("800a0001"+"20303d4d"+"1001"), time.Now())
+	if !c.Established() {
+		t.Error("not established by the console's ack")
+	}
+	// its reset: recorded, never answered
+	reset := false
+	c.OnReset = func() { reset = true }
+	n := len(out)
+	c.Handle(mustHex("800e0001"+"c0000000"+"0003"+"f8ba92b1"), time.Now())
+	if !reset || len(out) != n {
+		t.Errorf("reset seen %v, answered %d datagrams", reset, len(out)-n)
+	}
+}
+
+// The SYN retransmit timer is librudp's: 1 s, doubling, capped at 16 s.
+func TestSynBackoff(t *testing.T) {
+	var out [][]byte
+	c := NewConn(1, 0x1000, 1, func(d []byte) { out = append(out, d) })
+	t0 := time.Unix(100, 0)
+	c.Start(t0)
+	out = nil
+	now := t0
+	for _, step := range []time.Duration{1, 2, 4, 8, 16, 16} {
+		c.Tick(now.Add(step*time.Second - time.Millisecond))
+		if len(out) != 0 {
+			t.Fatalf("early retransmit before %v s", step)
+		}
+		now = now.Add(step * time.Second)
+		c.Tick(now)
+		if len(out) != 1 {
+			t.Fatalf("no retransmit at +%v s", step)
+		}
+		out = nil
+	}
 }

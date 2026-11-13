@@ -7,13 +7,15 @@ import (
 	"time"
 )
 
-// RUDP is the librudp layer as far as the spec defines it (§2.1-2.2, matching2-protocol.md §26): a datagram is a sequence of aggregator
-// frames, each `u16 (class<<14 | length incl. this header)`; muxmode 1 means class 2, which carries a u16 RUDP port (the joining console's pad
-// index + 1, the same on both ends) before the RUDP packet. A packet is `type<<6|flags, window, seq, [ack], [ts], block, payload`:
-// type 0 data, 1 ack/keepalive, 2 SYN or SYN+ACK, 3 reset. Both sides Initiate (simultaneous open), which Conn handles as in §26.
+// RUDP is the librudp layer (§2.1-2.2, matching2-protocol.md §26 and §43): a datagram is a sequence of aggregator frames, each
+// `u16 (class<<14 | length incl. this header)`; muxmode 1 means class 2, which carries a u16 RUDP port (the joining console's pad
+// index + 1, the same on both ends) before the RUDP packet. A packet is `type<<6|flags, window, seq, [ack], [ts], block, [options],
+// payload`: type 0 data, 1 ack/keepalive, 2 SYN or SYN+ACK (block: cap word, verA, verB, connId, MSS), 3 reset (block: reason u16, own
+// connId). Both sides Initiate (simultaneous open), which Conn handles as librudp's state machine does (§43). SEEN ON HARDWARE: the
+// SYN layout, class 2 + port 1, window byte, MSS, cap word, version words, the 1/2/4/8 s retransmit timer, the reset (guess.go).
 //
-// Delivery here is reliable and in order (go-back-N), message oriented: one RUDP data payload is one game message. How exactly librudp
-// retransmits is not decoded; the timings are guesses (guess.go).
+// Delivery here is reliable and in order (go-back-N), message oriented: one RUDP data payload is one game message. The data-phase
+// timings are still guesses (guess.go).
 const (
 	typeData  = 0
 	typeAck   = 1
@@ -50,6 +52,8 @@ type Conn struct {
 	peerISN  uint16
 	peerMSS  uint16
 	peerConn uint32
+	cap      uint16        // capability word we send: CapWord until the console's own is seen, then mirrored
+	rto      time.Duration // SYN / SYN+ACK retransmit timer, doubling
 	havePeer bool
 	unacked  []seg
 	queue    [][]byte
@@ -66,7 +70,7 @@ type seg struct {
 
 // NewConn prepares a context; nothing is sent until Start.
 func NewConn(port uint16, isn uint16, connID uint32, out func([]byte)) *Conn {
-	return &Conn{Port: port, Out: out, isn: isn, connID: connID, state: stSynSent, nextSeq: isn + 1}
+	return &Conn{Port: port, Out: out, isn: isn, connID: connID, state: stSynSent, nextSeq: isn + 1, cap: CapWord, rto: SynRetryFirst}
 }
 
 func (c *Conn) frame(pkt []byte) []byte {
@@ -84,20 +88,20 @@ func (c *Conn) tx(pkt []byte, now time.Time) {
 }
 
 func (c *Conn) synBlock() []byte {
-	b := binary.BigEndian.AppendUint16(nil, GuessCapWord)
-	b = binary.BigEndian.AppendUint16(b, GuessVerA)
-	b = binary.BigEndian.AppendUint16(b, GuessVerB)
+	b := binary.BigEndian.AppendUint16(nil, c.cap)
+	b = binary.BigEndian.AppendUint16(b, VerA)
+	b = binary.BigEndian.AppendUint16(b, VerB)
 	b = binary.BigEndian.AppendUint32(b, c.connID)
-	return binary.BigEndian.AppendUint16(b, GuessMSS)
+	return binary.BigEndian.AppendUint16(b, MSS)
 }
 
 func (c *Conn) synPkt() []byte {
-	p := []byte{typeSyn << 6, GuessWindowByte, byte(c.isn >> 8), byte(c.isn)}
+	p := []byte{typeSyn << 6, WindowByte, byte(c.isn >> 8), byte(c.isn)}
 	return append(p, c.synBlock()...)
 }
 
 func (c *Conn) synAckPkt() []byte {
-	p := []byte{typeSyn<<6 | flagAck, GuessWindowByte, byte(c.isn >> 8), byte(c.isn), byte(c.expect >> 8), byte(c.expect)}
+	p := []byte{typeSyn<<6 | flagAck, WindowByte, byte(c.isn >> 8), byte(c.isn), byte(c.expect >> 8), byte(c.expect)}
 	return append(p, c.synBlock()...)
 }
 
@@ -108,11 +112,11 @@ func (c *Conn) emptyAck() []byte {
 	if !GuessEmptyAckIsType0 {
 		t = typeAck
 	}
-	return []byte{t<<6 | flagAck, GuessWindowByte, byte(c.nextSeq >> 8), byte(c.nextSeq), byte(c.expect >> 8), byte(c.expect)}
+	return []byte{t<<6 | flagAck, WindowByte, byte(c.nextSeq >> 8), byte(c.nextSeq), byte(c.expect >> 8), byte(c.expect)}
 }
 
 func (c *Conn) dataPkt(s seg) []byte {
-	p := []byte{flagAck, GuessWindowByte, byte(s.seq >> 8), byte(s.seq), byte(c.expect >> 8), byte(c.expect)}
+	p := []byte{flagAck, WindowByte, byte(s.seq >> 8), byte(s.seq), byte(c.expect >> 8), byte(c.expect)}
 	return append(p, s.payload...)
 }
 
@@ -169,15 +173,18 @@ func (c *Conn) Tick(now time.Time) {
 		return
 	}
 	switch c.state {
-	case stSynSent:
-		if now.Sub(c.lastSyn) >= GuessSynRetry {
+	case stSynSent, stSynRcvd:
+		// librudp's timer: 1 s, doubling, capped at 16 s (seen: 1, 2, 4, 8 s)
+		if now.Sub(c.lastSyn) >= c.rto {
 			c.lastSyn = now
-			c.tx(c.synPkt(), now)
-		}
-	case stSynRcvd:
-		if now.Sub(c.lastSyn) >= GuessSynRetry {
-			c.lastSyn = now
-			c.tx(c.synAckPkt(), now)
+			if c.rto *= 2; c.rto > SynRetryMax {
+				c.rto = SynRetryMax
+			}
+			if c.state == stSynSent {
+				c.tx(c.synPkt(), now)
+			} else {
+				c.tx(c.synAckPkt(), now)
+			}
 		}
 	case stEstab:
 		if len(c.unacked) > 0 && now.Sub(c.unacked[0].sent) >= GuessRTO {
@@ -247,17 +254,21 @@ func (c *Conn) note(dir, s string, pkt []byte) {
 	}
 }
 
-// parse returns type, flags, seq, ack and the offset of the type block / payload (options skipped as the §26 decode reads them).
-func parse(p []byte) (typ, flags byte, seq, ack uint16, off int, err error) {
+// parse returns type, flags, seq, ack, the offset of the type block and the offset of the payload (librudp's order, R 0xddb8: header,
+// window, seq, ack, ts, type block, options, payload).
+func parse(p []byte) (typ, flags byte, seq, ack uint16, blk, off int, err error) {
+	fail := func(s string) (byte, byte, uint16, uint16, int, int, error) {
+		return 0, 0, 0, 0, 0, 0, fmt.Errorf("%s", s)
+	}
 	if len(p) < 4 {
-		return 0, 0, 0, 0, 0, fmt.Errorf("short packet")
+		return fail("short packet")
 	}
 	typ, flags = p[0]>>6, p[0]&0x3f
 	seq = binary.BigEndian.Uint16(p[2:])
 	off = 4
 	if flags&flagAck != 0 {
 		if len(p) < off+2 {
-			return 0, 0, 0, 0, 0, fmt.Errorf("short ack")
+			return fail("short ack")
 		}
 		ack = binary.BigEndian.Uint16(p[off:])
 		off += 2
@@ -265,46 +276,60 @@ func parse(p []byte) (typ, flags byte, seq, ack uint16, off int, err error) {
 	if flags&flagTS != 0 {
 		off += 2
 	}
+	blk = off
+	switch typ {
+	case typeSyn:
+		off += 12
+	case typeReset:
+		off += 6
+	}
+	if off > len(p) {
+		return fail("short type block")
+	}
 	if flags&flagOpts != 0 {
 		for off < len(p) {
 			t := p[off]
 			off++
-			if t == 0 {
-				break
+			if t&0x7f != 0 {
+				if off >= len(p) {
+					return fail("short option")
+				}
+				off += 1 + int(p[off])
 			}
-			if off >= len(p) {
-				return 0, 0, 0, 0, 0, fmt.Errorf("short option")
-			}
-			off += 1 + int(p[off])
-			if t&0x80 == 0 {
+			if t&0x80 != 0 {
 				break
 			}
 		}
 	}
 	if off > len(p) {
-		return 0, 0, 0, 0, 0, fmt.Errorf("options overrun")
+		return fail("options overrun")
 	}
-	return typ, flags, seq, ack, off, nil
+	return typ, flags, seq, ack, blk, off, nil
 }
 
 // Describe is the one-line form of an RUDP packet for the recorder.
 func Describe(p []byte) string {
-	typ, flags, seq, ack, off, err := parse(p)
+	typ, flags, seq, ack, blk, off, err := parse(p)
 	if err != nil {
-		return "unparsable: " + err.Error()
+		return fmt.Sprintf("unparsable (%v) %x", err, p)
 	}
-	s := fmt.Sprintf("type=%d flags=%#02x win=%#02x seq=%d", typ, flags, p[1], seq)
+	name := [...]string{"DATA", "ACK", "SYN", "RESET"}[typ]
+	if typ == typeSyn && flags&flagAck != 0 {
+		name = "SYN+ACK"
+	}
+	s := fmt.Sprintf("%s flags=%#02x win=%#02x seq=%#04x", name, flags, p[1], seq)
 	if flags&flagAck != 0 {
-		s += fmt.Sprintf(" ack=%d", ack)
+		s += fmt.Sprintf(" ack=%#04x", ack)
 	}
 	switch typ {
 	case typeSyn:
-		if len(p) >= off+12 {
-			s += fmt.Sprintf(" SYN cap=%#04x verA=%#04x verB=%#04x connid=%#08x mss=%d", binary.BigEndian.Uint16(p[off:]), binary.BigEndian.Uint16(p[off+2:]),
-				binary.BigEndian.Uint16(p[off+4:]), binary.BigEndian.Uint32(p[off+6:]), binary.BigEndian.Uint16(p[off+10:]))
-		}
-	default:
-		s += fmt.Sprintf(" payload=%d", len(p)-off)
+		s += fmt.Sprintf(" cap=%#04x verA=%#04x verB=%#04x connid=%#08x mss=%d", binary.BigEndian.Uint16(p[blk:]), binary.BigEndian.Uint16(p[blk+2:]),
+			binary.BigEndian.Uint16(p[blk+4:]), binary.BigEndian.Uint32(p[blk+6:]), binary.BigEndian.Uint16(p[blk+10:]))
+	case typeReset:
+		s += fmt.Sprintf(" reason=%d connid=%#08x", p[blk+1], binary.BigEndian.Uint32(p[blk+2:]))
+	}
+	if off < len(p) {
+		s += fmt.Sprintf(" payload(%d)=%x", len(p)-off, p[off:])
 	}
 	return s
 }
@@ -312,7 +337,7 @@ func Describe(p []byte) string {
 func after(a, b uint16) bool { return int16(a-b) > 0 } // a is later than b
 
 func (c *Conn) packet(p []byte, now time.Time) (deliver [][]byte, estab, reset bool) {
-	typ, flags, seq, ack, off, err := parse(p)
+	typ, flags, seq, ack, blk, off, err := parse(p)
 	if err != nil {
 		c.note("rx", "unparsable packet: "+err.Error(), p)
 		return
@@ -322,12 +347,13 @@ func (c *Conn) packet(p []byte, now time.Time) (deliver [][]byte, estab, reset b
 	}
 	switch typ {
 	case typeSyn:
-		if len(p) < off+12 {
-			c.note("rx", "short SYN block", p)
+		if verA, verB := binary.BigEndian.Uint16(p[blk+2:]), binary.BigEndian.Uint16(p[blk+4:]); verA < VerA || verB > VerB {
+			c.note("rx", "SYN version words refused (librudp aborts locally, reason 4): ignored", p)
 			return
 		}
-		c.peerConn = binary.BigEndian.Uint32(p[off+6:])
-		c.peerMSS = binary.BigEndian.Uint16(p[off+10:])
+		c.cap = binary.BigEndian.Uint16(p[blk:]) // the console's flags: its check wants ours equal
+		c.peerConn = binary.BigEndian.Uint32(p[blk+6:])
+		c.peerMSS = binary.BigEndian.Uint16(p[blk+10:])
 		if flags&flagAck != 0 {
 			if ack != c.isn+1 {
 				c.note("rx", fmt.Sprintf("SYN+ACK acks %d, want %d: ignored", ack, c.isn+1), p)
